@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools >= 61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["PyAres*"]
+
+
+[project]
+name = "athena_planner"
+version = 1.0.0
+requires-python = ">= 3.10"
+authors = [{ name = "AFRL", email = "AFRL.RX.AREScontact@us.af.mil" }]
+description = "Graig Ganitano's Simulated annealing planner for 3d printing"
+license = "MIT"
+dependencies = [
+    "PyAres (>=0.1.0)",
+    "numpy (>=2.2.0)",
+    "ares-datamodel (>=0.13.2b1)"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/AFRL-ARES"
+
