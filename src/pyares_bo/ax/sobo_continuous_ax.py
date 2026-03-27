@@ -34,81 +34,117 @@ from PyAres import PlanRequest, PlanResponse
 from pathlib import Path
 import pandas as pd
 import warnings
+from datetime import datetime
+import logging
+from ax.utils.common.logger import ROOT_STREAM_HANDLER
+ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 smart_seed_conditions = list()
 def sobo_cont_planner(request: PlanRequest) -> PlanResponse:
     '''
     Top level sobo_cont_planner function handles partsing the plan request into values useful for the planner
-    Based on the user settings, the planner will accept seed data
+    Based on the user settings, the planner will accept seed data, generate seed points or procede straight to planning using Ax
     '''
     global smart_seed_conditions
     # PyARES compatible single objective bayesian optimization planner based on the default Ax behavior
     # Initilizes a new Ax API client for each request 
 
-    # Top Level 
-    constraints = request.settings['Constraints']
-    seed_data = request.settings['Seed Data']
-    minimize = request.settings['Minimize']
-    smart_seed = request.settings['Smart Seed']
-
+    # Parse out settings. If settings are not defined in the request ocming over from ARES OS the fields don't exist 
+    # So there's a bit of checking
+    if 'Constraints' in request.settings:
+        constraints = request.settings['Constraints']
+    else:
+        constraints = list()
+    
+    if "Seed Data" in request.settings:
+        seed_data = request.settings['Seed Data']
+    else:
+        seed_data = ''
+    if "Minimize" in request.settings:
+        minimize = request.settings['Minimize']
+    else:
+        minimize=False
+    if 'Smart Seed' in request.settings:
+        smart_seed_enabled = request.settings['Smart Seed']
+    else:
+        smart_seed_enabled = False
+    
+    if 'Verbose Output' in request.settings:
+        verbose = request.settings['Verbose Output']
+    else:
+        verbose = False
+    
     parameters = [{'name':p.name,
                     'type':'range',
                     'bounds':[p.minimum_value, p.maximum_value]} for p in request.parameters]
     objective = {'objective':ObjectiveProperties(minimize=minimize)}
-
+    start = datetime.now()
     N_trial = len(request.analysis_results) # How many trials have been completed by the planner
+    print(f"--- Planning Trial #{N_trial} ---")
+    print(f'Planning Started at: {start.strftime("%Y-%m-%d %H:%M:%S")}')
+
     
-
+    
     # Check if seed data is provided by the user
-    if seed_data is not None or seed_data is not '':
-        has_seed_data = True
+    if seed_data is not None and seed_data != '':
         # Process The Seed Data into a form that can be passed to the planner
-        seed_data = process_seed_data(seed_data,parameters)
+        seed_data_list = process_seed_data(seed_data,parameters)
+        has_seed_data = True
     else:
+        seed_data_list = list()
         has_seed_data = False
+        
+    if verbose:
+        if has_seed_data:
+            print(f'\t{len(seed_data_list)} seed data points found')
+        else:
+            print('\tNo seed data provided')
 
+    # Process the data coming in with the planning request
+    if N_trial > 0:
+        trial_data = process_experimental_data(request)
+    else:
+        trial_data = []
+
+    if has_seed_data:
+        hist_data = seed_data_list + trial_data
+    else:
+        hist_data = trial_data
+    
     # If seed data is not provided, check if the smart_seed setting is enabled
-    if not has_seed_data and smart_seed == True:
+    if not has_seed_data and smart_seed_enabled == True:
         seed_type = request.settings['Smart Seed Type']
         smart_seed_points = request.settings['Number of Seed Experiments']
-
         # We want to be generic when supporting seeding methods, so we'll only generate them once
         # That way seed generation is determinisitc 
         if len(smart_seed_conditions) == 0:
+            if verbose:
+                print(f'\tSmart seed enabled - gererating {smart_seed_points} seed points of type "{seed_type}"')
             smart_seed_conditions = smart_seed(parameters, seed_type, smart_seed_points,constraints)
 
 
-        if N_trial < smart_seed_points and len(smart_seed_conditions) == 0:
-            pass
-        else:
-            parameterization = smart_seed_conditions[N_trial]
-    
+    if len(smart_seed_conditions) !=0 and N_trial <= len(smart_seed_conditions):
+        if verbose:
+            print(f'\tSeed Collection Enabled: Acquiring seed data point {N_trial}/{len(smart_seed_conditions)}')
+        # If there are planner-generated seed conditions, we don't call the planner and just return the seed conditon
+        parameterization = smart_seed_conditions[N_trial]
+    else:
+        # Pass data to the ax planner and get the next point:
+        if verbose:
+            print(f'\tUsing {len(hist_data)} data points (seed + trials) for BO planning')
+        parameterization = sobo_planner(parameters,objective,constraints,hist_data)
 
-    # Process the data coming in with the planning request
-
-
-    trial_data = process_experimental_data(request)
-    # Process previous trials for passing to planner
-    # Merge data with seed data (if any)
-
-    # Pass data to the ax planner and get the next point:
-    parameterization = sobo_planner(parameters,objective,constraints,hist_data)
-
-
-
-
+    # Repackage the parameterization for an ARES Plan Response
     parameter_names = list(parameterization.keys())
     new_test_condition = list(parameterization.values())
     print("\tProposed test condition:")
     for n,v in zip(parameter_names, new_test_condition):
         print(f"\t{n} = {v:.3f}")
-    print(f"--- End Planning for Trial #{N_trials}---")
+    end = datetime.now()
+    delta= end-start
+    print(f"--- End Planning for Trial #{N_trial} (Took {delta.total_seconds()}) seconds---")
 
     return PlanResponse(parameter_names=parameter_names, parameter_values=new_test_condition)
-
-
-
-
 
 
 def process_seed_data(seed_data_path:str, parameters:list[dict]) -> list[dict]:
@@ -150,13 +186,13 @@ def process_seed_data(seed_data_path:str, parameters:list[dict]) -> list[dict]:
     return data
 
     
-
 def process_experimental_data(request: PlanRequest) -> list[dict]:
     data = list()
-    for i in range(request.analysis_results):
+    for i in range(len(request.analysis_results)):
         # Make the dict of parameter:value pairs
-        par_dict = {p.name:p.param_history[i].achieved_value for p in request.parameters}
-        obj_dict = {'score':request.analysis_results[i]}
+        # The first parameter history entry will always be blank as it is called first so add one to the index
+        par_dict = {p.name:p.param_history[i+1].achieved_value for p in request.parameters}
+        obj_dict = {'objective':request.analysis_results[i]}
         data.append({'parameters':par_dict,
                      'objectives':obj_dict})
     return data
@@ -193,132 +229,26 @@ def sobo_planner(parameters:list[dict],
             params = data[i]['parameters']
             obj_score = data[i]['objectives']
 
-            trial_index = ax_client.attach_trial(parameters=params)
+            _, trial_index = ax_client.attach_trial(parameters=params)
             ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
     
     parameterization, _ = ax_client.get_next_trial()
     return parameterization
 
-    
-
-    
-    
-
-
-
-
-
-
-
-
-
-    # If seed data is provided, organize it into dicts that are easy to pass to the function wrappign the planner
-    N_trials = len(request.analysis_results)
-    # Organize Data 
-
-
-
-
-    if N_trials == 0:
-        pass
-    else:
-
-
-
-
-    ax_client = AxClient()
-    parameters = [{'name':p.name,
-                    'type':'range',
-                    'bounds':[p.minimum_value, p.maximum_value]} for p in request.parameters]
-    parameter_names = [i['name'] for i in parameters]
-    objective = {'score':ObjectiveProperties(minimize=minimize)}
-    ax_client.create_experiment(parameters=parameters,
-                                objectives=objective,
-                                parameter_constraints=constraints)
-
-    # Placeholder seed data handling
-    # TODO: Update once this part of ARES OS matures
-    '''
-    Seed Data Handling:
-    Planner checks to see if the seed data setting has been assigned and then checks that the seed data is a file and tries to read it
-    Seed data should be either an Excel file or a csv with column names that match the parameters being used
-    '''
-    use_seed = False
-    seed_data = request.settings['Seed Data']
-    if seed_data is not None or seed_data is not'':
-        seed_data = Path(seed_data)
-        if seed_data.is_file():
-            ext = seed_data.suffix
-            if ext == '.xlsx' or ext == '.xls':
-                data = pd.read_excel(str(seed_data))
-            elif ext == 'csv':
-                data = pd.read_csv(str(seed_data))
-            else:
-                use_seed = False
-                raise Warning('Seed Data file could not be read. File should be an Excel file (.xls, .xlsx) or .csv, proceding without seed data')
-
-            # Data integrrity checks
-            # Check that all parameters are present
-            if not all([i in data.columns for i in parameter_names]):
-                use_seed = False
-                raise Warning('Could not find all experimental parameters in the seed data, proceding without seed data')
-            if 'objective' not in data.columns:
-                use_seed = False
-                raise Warning('Could not locate "objective" column in seed data, proceding without seed data')
-            
-
+def smart_seed(parameters: list[dict], seed_type:str, N_seed_ponts: int, constraints:list[str] | None) -> list:
+    if seed_type == 'Latin Hyper Cube':
+        from seed_methods import LHSMDU_Generator
+        cube_gen = LHSMDU_Generator(parameters,N_seed_ponts)
+        if constraints is not None and len(constraints) > 0:
+            seed_df = cube_gen.make_constrained_hypercube(constraints)
         else:
-            use_seed = False
-            raise Warning('Seed Data file does not exist, proceding without seed data')
-                
-                
+            seed_df = cube_gen.make_hypercube()
 
-            # Check that an 'objective' column is present
+    #convert the dataframe from the seed generator to the list of dicts format
+    seed_conditions = list()
+    for i in range(len(df)):
+        entry_dict = {k:seed_df[k][i] for k in seed_df.columns}
 
-            # check if there are unused columns. If so warn the user
-    else:
-        use_seed = False  
+        seed_conditions.append(entry_dict)
 
-
-    if use_seed:
-        for i in range(N_seed_points):
-            # Make the dict of parameter:value pairs
-            params = {name:data[name].to_numpy()[i] for name in parameter_names}
-            obj_score = {'score':data['objective'].to_numpy()[i]}
-            trial_index = ax_client.attach_trial(parameters=params)
-            ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
-
-    N_trials = len(request.analysis_results)
-    print(f'--- Planning Trial #{N_trials} ---')
-    if N_trials == 0: # First run
-        parameterization, _ = ax_client.get_next_trial()
-        # If any of the parameters have a specified initial value overwrite the planner suggestion
-        for p in request.parameters:
-            if isinstance(p.initial_value, float):
-                print(f'\tInitial value found, overriding planner: {p.name}: p.initial_value')
-                parameterization[p.name] = p.initial_value
-    
-    else: # attach data from previous experiments to the experiment so it can plan the requested point.
-        print(f'\t Found data for {N_trials} previous experimental data points')
-        for i in range(N_trials):
-            # Make the dict of parameter:value pairs
-            params = {p.name:p.param_history[i].achieved_value for p in request.parameters}
-            obj_score = {'score':request.analysis_results[i]}
-
-            trial_index = ax_client.attach_trial(parameters=params)
-            ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
-        
-        parameterization, _ = ax_client.get_next_trial()
-
-    parameter_names = list(parameterization.keys())
-    new_test_condition = list(parameterization.values())
-    print("\tProposed test condition:")
-    for n,v in zip(parameter_names, new_test_condition):
-        print(f"\t{n} = {v:.3f}")
-    print(f"--- End Planning for Trial #{N_trials}---")
-
-    return PlanResponse(parameter_names=parameter_names, parameter_values=new_test_condition)
-
-def smart_seed(parameters: list[dict], seed_type:str, N_seed_ponts: int) -> list:
-    
     return seed_conditions

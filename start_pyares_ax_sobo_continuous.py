@@ -1,6 +1,6 @@
 
 from PyAres import AresPlannerService, AresDataType
-from pyares_bo import sobo_cont_planner
+from src.pyares_bo.ax import sobo_cont_planner
 
 if __name__ == "__main__":
   name = "PyARES SOBO Planner"
@@ -9,7 +9,7 @@ if __name__ == "__main__":
   planner = AresPlannerService(sobo_cont_planner,
                                name,
                                description,
-                               version, port=8002)
+                               version, port=1337)
 
   #Mark that the planner supports numbers
   planner.add_supported_type(AresDataType.NUMBER)
@@ -20,7 +20,7 @@ if __name__ == "__main__":
   planner.add_setting('Constraints',AresDataType.STRING_ARRAY) # An array of strings that define constraints between parameters that will be passed to the underlying Ax API
   planner.add_setting("Verbose Output", AresDataType.BOOLEAN) #If enabled, will print out more detailed information during planning
   planner.add_setting("RNG Seed", AresDataType.NUMBER,optional=True) # Sets a seed for the random number generator
-  planner.add_setting("Smart Seed",AresDataType.BOOLEAN) # If True and there is no seed data providedm will run specified numbner of seed experiments before planing
+  planner.add_setting("Smart Seed",AresDataType.BOOLEAN) # If True and there is no seed data provided will run specified numbner of seed experiments before planing
   planner.add_setting("Smart Seed Type",AresDataType.STRING,constraints=['Latin Hyper Cube']) # The method used to generate the seed points
   planner.add_setting("Smart Seed Points",AresDataType.NUMBER) # How many seed experiments to do before starting BO
   planner.start()
