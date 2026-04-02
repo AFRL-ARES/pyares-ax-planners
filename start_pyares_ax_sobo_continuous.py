@@ -2,6 +2,7 @@
 from PyAres import AresPlannerService, AresDataType
 from src.pyares_bo.ax import sobo_cont_planner
 
+
 if __name__ == "__main__":
   name = "PyARES SOBO Planner"
   description = "Single objective baysian optimization planner using Ax and Honegumi for continuous variables"
