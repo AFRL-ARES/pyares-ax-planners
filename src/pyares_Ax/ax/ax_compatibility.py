@@ -40,6 +40,7 @@ import logging
 from ax.utils.common.logger import ROOT_STREAM_HANDLER
 from typing import Any, Callable
 import sympy as sp
+import re
 ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 class PyAres_Ax_Planner(object):
@@ -90,6 +91,7 @@ class PyAres_Ax_Planner(object):
         """
         return {'name':self.name,'version':self.version_number,'description':self.description}
     
+
     def add_setting(self, setting_name:str, 
                     setting_type:AresDataType,
                     optional: bool = True,
@@ -110,6 +112,7 @@ class PyAres_Ax_Planner(object):
                                    'constraints':constraints,
                                    'default_value':default_value})
     
+
     def configure_settings(self, planner:AresPlannerService) -> AresPlannerService:
         '''
         Applies the planner settings to the AresPlannerService object. Also initializes default settings within the
@@ -128,6 +131,7 @@ class PyAres_Ax_Planner(object):
             planner.add_setting(_s.pop('setting_name'), _s.pop('setting_type'),**_s)
         return planner
     
+
     def call_planner(self,request: PlanRequest) -> PlanResponse:
         """
         Generic planner calling function that manages sorting all of the data contained in the incoming
@@ -174,6 +178,7 @@ class PyAres_Ax_Planner(object):
         # Configure Planning parameters and objectives
         self._configure_parameters(request)
         self._configure_objectives()
+        self._configure_constraints()
 
         # Parse seed data and previous trials into a format that is useful for the planner
         self._process_seed_data()
@@ -201,7 +206,7 @@ class PyAres_Ax_Planner(object):
         print("Proposed test condition:")
         for i,(n,v) in enumerate(zip(ares_response.keys(), ares_response.values())):
             if override_flags[i]:
-                 print(f"\t{n} = {v:.3f} (Overriden by supplied inital value))")
+                 print(f"\t{n} = {v:.3f} (Overriden by supplied inital value)")
             else:
                 print(f"\t{n} = {v:.3f}")
 
@@ -226,7 +231,7 @@ class PyAres_Ax_Planner(object):
         # TODO: Update once support for multiple objectives is better supported by ARES OS/PyAres
         self.objectives = {'objective':ObjectiveProperties(minimize=False)} 
 
-    ## General support functions, may be overridden if necessary
+    ## General support functions, may be overridden if necessary but shouldn't need to be for most use cases
     def _configure_parameters(self,request):
         '''
         This function pasrses input parameters, constraints, and implicit values to figure out what to pass to the planner routine as well as 
@@ -259,14 +264,14 @@ class PyAres_Ax_Planner(object):
                                 'type':'range',  
                                 'bounds':[p.minimum_value, p.maximum_value]} for p in request.parameters]
         
-        if len(self.settings['Implicit Values']) == 0 and self.settings['Planning Parameter Override'] == '':
+        if len(self.settings['Implicit Values']) == 0:
             self._planner_parameters = self._ares_parameters
         else:
             for value_str in self.settings['Implicit Values']:
                 # Split out the paramter strings
                 expr_elements = value_str.split('=')
-                lhs = expr_elements[0].strip
-                rhs = expr_elements[-1].strip
+                lhs = expr_elements[0].strip()
+                rhs = expr_elements[-1].strip()
                 # evaluate RHS to sympy expression then turn it into a function
                 expr = sp.sympify(rhs) 
                 symbols = list(expr.free_symbols)
@@ -276,13 +281,34 @@ class PyAres_Ax_Planner(object):
                 value_dict = {'name':lhs, 'function':func, 'inputs':symbol_names,'expression':value_str}
                 # If the parameter is an ares parameter it gets stored in self._implicit_parameters, otherwise it gets stored in self._implicit_values
                 if lhs in self._ares_parameter_names: 
-                    self.implicit_parameters.append(value_dict)
+                    self._implicit_parameters.append(value_dict)
                 else:
                     self._implicit_values.append(value_dict)
                 #sets the values that the planner will actuall operate on
-                self._planner_parameters = [p for p in self._ares_parameters if p.name not in self._implicit_parameter_names]                
+                self._planner_parameters = [p for p in self._ares_parameters if p['name'] not in self._implicit_parameter_names]                
         # TODO: Figure out how to handle telling the planner to plan over derived variables rather than the parameters recieved from ARES OS and how to solve 
         # the degeneracy and bounds issues that come with that capibility
+
+
+    def _configure_constraints(self):
+        """
+        Supports the use of implicit values in constraints so that variables can be defined once and reused 
+        """
+        if len(self.constraints) >0:
+            for i, con_str in enumerate(self.constraints):
+                vars_to_evaluate = re.findall(r'\{([^}]+)\}', con_str) # Finds things inside curly braces
+    
+                if len(vars_to_evaluate)>0:
+                    computed_values = {}
+                    for var in vars_to_evaluate:
+                        # We only want to compute it once if it appears multiple times
+                        if var not in computed_values:
+                            val = self._eval_implicit({},var)
+                            computed_values[var] = val
+                            
+                    # 3. Format the original string using the computed dictionary
+                    formatted_str = con_str.format(**computed_values)
+                    self.constraints[i] = formatted_str
 
     def _process_experimental_data(self, request: PlanRequest):
         """
@@ -295,6 +321,7 @@ class PyAres_Ax_Planner(object):
         for p in request.parameters:
             self.achieved_values[p.name] = list([p.param_history[i].achieved_value for i in range(len(request.analysis_results))])
             self.planned_values[p.name] = list([p.param_history[i].planned_value for i in range(len(request.analysis_results))])
+
 
     def _process_seed_data(self):
         """
@@ -316,6 +343,7 @@ class PyAres_Ax_Planner(object):
                 self.seed_data = []
         else:
             self.seed_data = []
+
 
     def _process_seed_data_file(self,file:Path) ->list[dict]:
         """
@@ -352,6 +380,8 @@ class PyAres_Ax_Planner(object):
             data.append({'parameters':par_dict,
                         'objectives':obj_dict})
         return data
+    
+
     def _eval_implicit(self,input_dict:dict, target_name:str):
         """
         Calculates the target implicit value or factor based on inputs and definitions.
@@ -362,8 +392,8 @@ class PyAres_Ax_Planner(object):
         Returns:
             The evaluated result for the target_name.
         """
-        implicit_params = self.implicit_parameters
-        derived_vals = self.derived_values
+        implicit_params = self._implicit_parameters
+        derived_vals = self._implicit_values
 
         
         # 1. Combine computable formulas into a single registry for O(1) lookups
@@ -415,6 +445,8 @@ class PyAres_Ax_Planner(object):
             return result
         # 4. Trigger the recursive evaluation for our target
         return resolve(target_name)
+    
+
     def _plan_first_run(self,request: PlanRequest) -> tuple[dict,Outcome,list]:
         initial_conditions = self._get_initial_conditions(request)
             # If all parameters are present in the initial conditions response, skip planning
@@ -445,11 +477,12 @@ class PyAres_Ax_Planner(object):
 
         # NOTE: Inital condition overrides coming from ARES OS are given priority and ignore any relational constraints for implicit parameters
         for i, name in enumerate(self._ares_parameter_names):
-            if name in ares_response:
-                ares_response[name] = initial_conditions['name']
+            if name in initial_conditions:
+                ares_response[name] = initial_conditions[name]
                 initial_condition_override[i] = True
         
         return (ares_response, outcome, initial_condition_override)
+    
 
     def _get_initial_conditions(self,request: PlanRequest) -> dict:
         response = dict()
@@ -457,7 +490,8 @@ class PyAres_Ax_Planner(object):
             if p.initial_value is not None:
                 response[p.name] = p.initial_value
         return response
-        
+
+
     def _convert_plan_to_ares(self,response:dict) ->dict:
         """Converts the planning respoinse from the the planner paramter set to the Ares Parameter Reponse
 
@@ -478,6 +512,7 @@ class PyAres_Ax_Planner(object):
                     ares_response[p] = self._eval_implicit(response,p)
         
         return ares_response
+
 
     @property 
     def parameter_names(self) -> list[str]:
