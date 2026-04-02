@@ -1,6 +1,6 @@
 from PyAres import AresPlannerService, AresDataType
-from src.pyares_bo.ax import PyAres_Ax_Planner
-from src.pyares_bo.ax import SOBO_Ax_Planner
+from src.pyares_Ax.ax import PyAres_Ax_Planner
+from src.pyares_Ax.ax import SOBO_Ax_Planner
 
 if __name__ == "__main__":
     plan_object = SOBO_Ax_Planner()
