@@ -8,7 +8,7 @@ class SOBO_Ax_Planner(PyAres_Ax_Planner):
         super().__init__()
         self.name = "SOBO Ax Planner"
         self.description = "Single Objective Bayesian Optimization planner for continuous variables using Ax"
-        self.version_number = "0.0.2"
+        self.version_number = "0.1.0"
         self.plan_function = sobo_planner
         self.add_setting('Minimize', AresDataType.BOOLEAN,False)
         self.add_setting("RNG Seed", AresDataType.NUMBER,optional=True) # Sets a seed for the random number generator
