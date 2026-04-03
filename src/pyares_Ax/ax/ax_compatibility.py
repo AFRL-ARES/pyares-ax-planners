@@ -37,11 +37,12 @@ import warnings
 from datetime import datetime
 from ax.service.ax_client import ObjectiveProperties
 import logging 
-from ax.utils.common.logger import ROOT_STREAM_HANDLER
 from typing import Any, Callable
 import sympy as sp
 import re
-ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
+import io
+# from ax.utils.common.logger import ROOT_STREAM_HANDLER
+# ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 class PyAres_Ax_Planner(object):
     """
@@ -61,6 +62,9 @@ class PyAres_Ax_Planner(object):
         self.parameters = []
         self.implicit_parameters = []
         self.derived_values = []
+        self._seed_data_df: pd.DataFrame = pd.DataFrame()
+        self._planned_df: pd.DataFrame = pd.DataFrame()
+        self._acheived_df: pd.DataFrame = pd.DataFrame()
         # Place Holders for for planner specific information, these should be overridden by child classes
         self.plan_function : Callable = plan_function
         self.planner_input_type : AresDataType = AresDataType.NUMBER
@@ -80,6 +84,7 @@ class PyAres_Ax_Planner(object):
         self.add_setting(setting_name='Constraints',setting_type=AresDataType.STRING_ARRAY)
         self.add_setting(setting_name='Implicit Values',setting_type=AresDataType.STRING_ARRAY) 
         self.add_setting(setting_name='Verbose Output',setting_type=AresDataType.BOOLEAN,default_value=True)
+        # TODO: This only allows for slecting on option or the other. Do we epect the possibility of a mix?
         self.add_setting(setting_name='Parameter Value Type',setting_type=AresDataType.STRING,optional=False,constraints=['Planned','Acheived'],default_value='Planned')
     
     ### Interface functions ###
@@ -164,12 +169,12 @@ class PyAres_Ax_Planner(object):
                             values and a status message for the planning process.
         """
         #TODO: Evaluate if it is desierable for to support the use of a Persistent Ax client an what needs to change to do that.
-        # Start Planning, start tracking time
+
+        # Start planning, track elapsed time
         start = datetime.now()
         self.N_trial = len(request.analysis_results)
         print(f"--- Planning Trial #{self.N_trial} ---")
         print(f' Planning Started at: {start.strftime("%Y-%m-%d %H:%M:%S")}')
-
         # Updates settings from the request and parses a few essential values
         self.settings.update(request.settings)
         self.verbose = self.settings['Verbose Output']
@@ -182,7 +187,12 @@ class PyAres_Ax_Planner(object):
 
         # Parse seed data and previous trials into a format that is useful for the planner
         self._process_seed_data()
+        if self.verbose:
+            print(f'\tFound {len(self._seed_data_df)} points of existing seed data')
         self._process_experimental_data(request)
+        if self.verbose:
+            print(f'\tFound {self.N_trial} points of existing experimental data')
+        buffer, handler, logger = self._ax_log_interceptor()
 
         if self.N_trial == 0:
             # Separate logic to handle the first run of the planner for things specified initial conditions
@@ -193,16 +203,24 @@ class PyAres_Ax_Planner(object):
                 plan_response = self.plan_function(parameters=self._planner_parameters,
                                                 objective=self.objectives,
                                                 constraints=self.constraints,
-                                                data=self.seed_data+self.data,
+                                                data=self.data,
                                                 settings=self.settings)
                 outcome= Outcome.SUCCESS
             except Exception as e:
                 print(f' Planning Failed with error:{e}')
                 plan_response = {p:-1 for p in self.parameter_names}
                 outcome = Outcome.FAILURE
-
             ares_response = self._convert_plan_to_ares(plan_response)
-
+        captured_text = buffer.getvalue()
+        if self.verbose:
+            print("\n~~~ Begin Ax logs ~~~")
+            print(captured_text.replace('\n','\n\t'))
+            print("~~~ End Ax Ax logs ~~~\n")
+    
+        # Clean up when done
+        logger.removeHandler(handler)
+        buffer.close()
+        
         print("Proposed test condition:")
         for i,(n,v) in enumerate(zip(ares_response.keys(), ares_response.values())):
             if override_flags[i]:
@@ -312,15 +330,23 @@ class PyAres_Ax_Planner(object):
 
     def _process_experimental_data(self, request: PlanRequest):
         """
-        Processes the experimental trial data in the PyAres request into a format that the planner can use.
+        Processes the experimental trial data in the PyAres request into a pandas dataframe for easier manipulation and reshaping .
 
         Args:
             request (PlanRequest): PyAres Planning request
         """
-        self.objective_values = request.analysis_results
+        cols = self._ares_parameter_names + list(self.objectives.keys())
+        planned_df = pd.DataFrame(columns=cols)
+        achieved_df = pd.DataFrame(columns=cols)
         for p in request.parameters:
-            self.achieved_values[p.name] = list([p.param_history[i].achieved_value for i in range(len(request.analysis_results))])
-            self.planned_values[p.name] = list([p.param_history[i].planned_value for i in range(len(request.analysis_results))])
+            planned_df[p.name] = [p.param_history[i].planned_value for i in range(len(request.analysis_results))]
+            achieved_df[p.name] = [p.param_history[i].achieved_value for i in range(len(request.analysis_results))]
+        # TODO: rework when mulit-objective planning is implemented
+        planned_df['objective'] = request.analysis_results
+        achieved_df['objective'] = request.analysis_results
+        
+        self._acheived_df = achieved_df
+        self._planned_df = planned_df
 
 
     def _process_seed_data(self):
@@ -337,15 +363,15 @@ class PyAres_Ax_Planner(object):
         # TODO: Update instructions once multi-objective planning is implemented.
         if self.settings['Seed Data'] != '':
             if seed_as_path.is_file():
-                self.seed_data = self._process_seed_data_file(seed_as_path)
+                self._seed_data_df = self._process_seed_data_file(seed_as_path)
             else:
                 warnings.warn(f"Seed data setting {self.settings['Seed Data']} is not recognized as a file. Data will not be used")
-                self.seed_data = []
+                self._seed_data_df = pd.DataFrame()
         else:
-            self.seed_data = []
+            self._seed_data_df = pd.DataFrame()
 
 
-    def _process_seed_data_file(self,file:Path) ->list[dict]:
+    def _process_seed_data_file(self,file:Path) ->pd.DataFrame:
         """
         Formats the data in a .csv or excel file to the list of dicts format required by the planner. With checks to ensure that the required values are present.
 
@@ -372,15 +398,7 @@ class PyAres_Ax_Planner(object):
         if not all([i in self.parameter_names + ['objective', 'Index', 'index'] for i in df.columns]):
             warnings.warn('Extra columns were found in the seed data file that were not used in planning.')
         
-        # Format the data in to list of dicts format that the Ax planner expects
-        data = list()
-        for i in range(len(df)):
-            obj_dict = {'objective':df['objective'][i]}
-            par_dict = {p:df[p][i] for p in self.parameter_names}
-            data.append({'parameters':par_dict,
-                        'objectives':obj_dict})
-        return data
-    
+        return df
 
     def _eval_implicit(self,input_dict:dict, target_name:str):
         """
@@ -465,7 +483,7 @@ class PyAres_Ax_Planner(object):
                 plan_response = self.plan_function(parameters=self._planner_parameters,
                                             objective=self.objectives,
                                             constraints=self.constraints,
-                                            data=self.seed_data+self.data,
+                                            data=self.data,
                                             settings=self.settings)
                 outcome= Outcome.SUCCESS
             except Exception as e:
@@ -513,6 +531,16 @@ class PyAres_Ax_Planner(object):
         
         return ares_response
 
+    def _ax_log_interceptor(self):
+        ax_logger = logging.getLogger("ax")
+        ax_logger.handlers.clear()
+        ax_logger.propagate = False
+        log_stream = io.StringIO()
+        handler = logging.StreamHandler(log_stream)
+        ax_logger.addHandler(handler)
+        ax_logger.setLevel(logging.INFO) # Set to DEBUG if you want more verbose output
+    
+        return log_stream, handler, ax_logger
 
     @property 
     def parameter_names(self) -> list[str]:
@@ -531,19 +559,33 @@ class PyAres_Ax_Planner(object):
     
     @property
     def data(self) -> list[dict]:
-        data = list()
-        # Return a list of dicts format compaible with giving values to the Ax api
-        for i in range(len(self.objective_values)):
-            if self.settings['Parameter Value Type'] == "Planned":
-                par_dict = {key:self.planned_values[key][i] for key in self.planned_values}
-            elif self.settings['Parameter Value Type'] == "Acheived":
-                par_dict = {key:self.achieved_values[key][i] for key in self.achieved_values}
-            else:
-                raise Exception('Parameter Value Type must be Planned or Acheived')
-
-            obj_dict = {'objective':self.objective_values[i]}
-            data.append({'parameters':par_dict,
-                        'objectives':obj_dict})
+        # Downselects the paramters to pass to the planner and the data (seed data + previous trials) in a format compatible with the Ax API
+        if len(self._seed_data_df) >0:
+            working_seed_df = self._seed_data_df.copy()
+        else:
+            working_seed_df = pd.DataFrame(columns=self._planner_parameter_names+list(self.objectives.keys()))
+        if self.settings['Parameter Value Type'] == "Planned":
+            working_data_df = self._planned_df.copy()
+        elif self.settings['Parameter Value Type'] == "Acheived":
+            working_data_df = self._acheived_df.copy()
+        else:
+            raise Exception('Parameter Value Type must be Planned or Acheived')
+        if len(working_data_df) == 0:
+            working_data_df = pd.DataFrame(columns=self._planner_parameter_names+list(self.objectives.keys()))
+        # Downselect both dataframes to just the planning paramters
+        working_data_df = working_data_df[self._planner_parameter_names+list(self.objectives.keys())]
+        working_seed_df = working_seed_df[self._planner_parameter_names+list(self.objectives.keys())]
+        # Combine into a master df of what needs to be sent to the planner, then split into parameters and objective(s) dfs
+        composite_df = pd.concat([working_seed_df,working_data_df],ignore_index=True).reset_index(drop=True)
+        parameters_df = composite_df[self._planner_parameter_names]
+        objectives_df = composite_df[list(self.objectives.keys())]
+        
+        p_dict = parameters_df.to_dict(orient='records')
+        o_dict = objectives_df.to_dict(orient='records')
+        data = []
+        for i in range(len(p_dict)):
+            data.append({'parameters':p_dict[i],
+                         'objectives':o_dict[i]})
         return data
     
 def plan_function(parameters: list[dict],

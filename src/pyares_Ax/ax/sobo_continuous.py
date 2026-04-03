@@ -1,22 +1,22 @@
 from .ax_compatibility import PyAres_Ax_Planner
 from ax.service.ax_client import AxClient, ObjectiveProperties
 from PyAres import AresDataType
+from time import time
+import sys
+import io
+# import logging
+# from ax.utils.common.logger import ROOT_STREAM_HANDLER
+# ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 class SOBO_Ax_Planner(PyAres_Ax_Planner):
     def __init__(self):
         super().__init__()
         self.name = "SOBO Ax Planner"
         self.description = "Single Objective Bayesian Optimization planner for continuous variables using Ax"
-        self.version_number = "0.0.1"
+        self.version_number = "0.0.2"
         self.plan_function = sobo_planner
         self.add_setting('Minimize', AresDataType.BOOLEAN,False)
         self.add_setting("RNG Seed", AresDataType.NUMBER,optional=True) # Sets a seed for the random number generator
-        self.add_setting("Self Seed",AresDataType.BOOLEAN) # If True and there is no seed data provided will run specified numbner of seed experiments before planing
-        self.add_setting("Self Seed Type",AresDataType.STRING,constraints=['Latin Hyper Cube']) # The method used to generate the seed points
-        self.add_setting("Self Seed Points",AresDataType.NUMBER)
-
-    
-
 
 def _configure_objectives(self):
     # Override the parent class's objective setter function so we can use the planner specific behavior
@@ -41,6 +41,9 @@ def sobo_planner(parameters:list[dict],
 
     # Function to actually plug everything into the Ax API client
     ax_client = AxClient()
+    if not isinstance(settings['RNG Seed'],int):
+        settings['RNG Seed'] = int(time())
+    ax_client._random_seed = settings['RNG Seed']
     try:
         ax_client.create_experiment(parameters=parameters,
                                     objectives=objective,
@@ -56,7 +59,6 @@ def sobo_planner(parameters:list[dict],
 
             _, trial_index = ax_client.attach_trial(parameters=params)
             ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
-    
     parameterization, _ = ax_client.get_next_trial()
-    return parameterization
 
+    return parameterization

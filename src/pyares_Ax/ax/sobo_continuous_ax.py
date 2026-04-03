@@ -35,9 +35,6 @@ from pathlib import Path
 import pandas as pd
 import warnings
 from datetime import datetime
-import logging
-from ax.utils.common.logger import ROOT_STREAM_HANDLER
-ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 smart_seed_conditions = list()
 def sobo_cont_planner(request: PlanRequest) -> PlanResponse:
