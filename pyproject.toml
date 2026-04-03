@@ -3,22 +3,25 @@ requires = ["setuptools >= 61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["PyAres*"]
-
+where = ["src"]
+exclude = ["testing"]
+include = ["pyares_Ax"]
 
 [project]
-name = ""
-version = 1.0.0
+name = "pyares-Ax"
+version = "0.2.0"
 requires-python = ">= 3.10"
 authors = [{ name = "AFRL", email = "AFRL.RX.AREScontact@us.af.mil" }]
 description = "PyAres Compatible Baysian Optimizaiton Planners based on Meta's Ax API"
 license = "MIT"
 dependencies = [
-    "PyAres (>=0.1.0)",
-    "numpy (>=2.2.0)",
-    "ares-datamodel (>=0.13.2b1)"
-    "ax"
+    "PyAres (>=0.4.0)",
+    "ax-platform (>=1.2.0)",
+    "pandas (>=3.0.0)",
+    "matplotlib (>=3.10.0)",
+    "sympy (>=1.14.0)",
 ]
+readme = "readme.md"
 
 [project.urls]
 "Homepage" = "https://github.com/AFRL-ARES"

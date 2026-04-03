@@ -2,11 +2,6 @@ from .ax_compatibility import PyAres_Ax_Planner
 from ax.service.ax_client import AxClient, ObjectiveProperties
 from PyAres import AresDataType
 from time import time
-import sys
-import io
-# import logging
-# from ax.utils.common.logger import ROOT_STREAM_HANDLER
-# ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 class SOBO_Ax_Planner(PyAres_Ax_Planner):
     def __init__(self):
