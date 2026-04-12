@@ -41,6 +41,8 @@ from typing import Any, Callable
 import sympy as sp
 import re
 import io
+import os
+from ..visualization import plot_trials_progress
 # from ax.utils.common.logger import ROOT_STREAM_HANDLER
 # ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
@@ -86,7 +88,8 @@ class PyAres_Ax_Planner(object):
         self.add_setting(setting_name='Verbose Output',setting_type=AresDataType.BOOLEAN,default_value=True)
         # TODO: This only allows for slecting on option or the other. Do we epect the possibility of a mix?
         self.add_setting(setting_name='Parameter Value Type',setting_type=AresDataType.STRING,optional=False,constraints=['Planned','Acheived'],default_value='Planned')
-    
+        # NOTE: Once the visualizer service is added this will probably need to be removed/moved
+        self.add_setting(setting_name="Output Folder",setting_type=AresDataType.STRING,optional=False,default_value=str(os.path.expanduser('~')))
     ### Interface functions ###
     # These functions are expected to be implemented in all planner classes and are the primary way PyAres interfaces with the planner
     def info(self) -> dict:
@@ -235,6 +238,8 @@ class PyAres_Ax_Planner(object):
         response = PlanResponse(parameter_names=list(ares_response.keys()),
                                 parameter_values=list(ares_response.values()),
                                 planning_outcome=outcome)
+        # Plot the results of the last trial
+        plot_trials_progress(request)
         return response
     
     ### Support functions - Not intended for general interfacing
