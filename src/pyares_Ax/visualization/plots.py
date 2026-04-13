@@ -19,7 +19,7 @@ def plot_trials_progress(request:PlanRequest):
     # TODO: possible issues with this if the day ticks over during a campaing. Can we send over the campaign start time as well?
     experiment_time = datetime.strptime(request.request_metadata.experiment_start_time, "%Y-%m-%d %H:%M:%S")
     experiment_date = experiment_time.strftime("%Y-%m-%d") # Just getting the YMD to put in the name for easy sorting
-    experiment_time = experiment_time.strftime("%Y-%m-%dT%H-%M-%S")
+    experiment_time = experiment_time.strftime("%Y-%m-%dT%H-%M")
 
     experiment_name = f'{experiment_time}_experiment_{n_iter}'
     # experiment_id = request.request_metadata.experiment_id

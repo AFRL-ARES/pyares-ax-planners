@@ -526,7 +526,7 @@ class PyAres_Ax_Planner(object):
         """
         ares_response = dict()
         if self._ares_parameter_names == self._planner_parameter_names:
-            ares_reponse = response
+            ares_response = response
         else:
             for p in self._ares_parameter_names:
                 if p in self._planner_parameter_names:

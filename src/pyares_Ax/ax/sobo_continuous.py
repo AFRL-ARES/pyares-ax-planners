@@ -13,9 +13,9 @@ class SOBO_Ax_Planner(PyAres_Ax_Planner):
         self.add_setting('Minimize', AresDataType.BOOLEAN,False)
         self.add_setting("RNG Seed", AresDataType.NUMBER,optional=True) # Sets a seed for the random number generator
 
-def _configure_objectives(self):
-    # Override the parent class's objective setter function so we can use the planner specific behavior
-    self.objectives = {'objective':ObjectiveProperties(minimize=self.settings['Minimize'])}
+    def _configure_objectives(self):
+        # Override the parent class's objective setter function so we can use the planner specific behavior
+        self.objectives = {'objective':ObjectiveProperties(minimize=self.settings['Minimize'])}
 
 def sobo_planner(parameters:list[dict], 
                  objective:dict, 
