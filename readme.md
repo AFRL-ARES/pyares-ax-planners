@@ -14,13 +14,13 @@ This repository contains methods and examples for using Bayesian optimization pl
 
 ## Installation & Environment Setup
 
-This project requires **Python >=3.10**. A dedicated environment is highly recommended to keep module dependences for differnt PyAres services from causing issues.
+This project requires **Python >=3.11**. A dedicated environment is highly recommended to keep module dependences for differnt PyAres services from causing issues.
 
 ### Option A: Using Anaconda / Miniconda / Miniforge (Recommended)
 
 1.  **Create the environment:**
     ```bash
-    conda create -n pyares_ax python=3.10 pip setuptools
+    conda create -n pyares_ax python=3.11 pip setuptools
     ```
 2.  **Activate the environment:**
     ```bash
