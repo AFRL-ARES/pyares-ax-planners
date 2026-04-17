@@ -90,6 +90,7 @@ class PyAres_Ax_Planner(object):
         self.add_setting(setting_name='Parameter Value Type',setting_type=AresDataType.STRING,optional=False,constraints=['Planned','Acheived'],default_value='Planned')
         # NOTE: Once the visualizer service is added this will probably need to be removed/moved
         self.add_setting(setting_name="Output Folder",setting_type=AresDataType.STRING,optional=False,default_value=str(os.path.expanduser('~')))
+
     ### Interface functions ###
     # These functions are expected to be implemented in all planner classes and are the primary way PyAres interfaces with the planner
     def info(self) -> dict:
@@ -119,7 +120,7 @@ class PyAres_Ax_Planner(object):
                                    'optional':optional,
                                    'constraints':constraints,
                                    'default_value':default_value})
-    
+
 
     def configure_settings(self, planner:AresPlannerService) -> AresPlannerService:
         '''
@@ -175,6 +176,7 @@ class PyAres_Ax_Planner(object):
 
         # Start planning, track elapsed time
         start = datetime.now()
+        self._config_ouptut(request)
         self.N_trial = len(request.analysis_results)
         print(f"--- Planning Trial #{self.N_trial} ---")
         print(f' Planning Started at: {start.strftime("%Y-%m-%d %H:%M:%S")}')
@@ -244,6 +246,22 @@ class PyAres_Ax_Planner(object):
     
     ### Support functions - Not intended for general interfacing
     ##Override these functions when configuring your planner subclass
+
+    def _config_ouptut(self,request: PlanRequest):
+        output_folder = request.settings['Output Folder']
+        campaign_name = request.request_metadata.campaign_name
+        n_iter = len(request.analysis_results)
+        # TODO: possible issues with this if the day ticks over during a campaign. Can we send over the campaign start time as well?
+        experiment_time = datetime.strptime(request.request_metadata.experiment_start_time, "%Y-%m-%d %H:%M:%S")
+        experiment_date = experiment_time.strftime("%Y-%m-%d") # Just getting the YMD to put in the name for easy sorting
+        experiment_time = experiment_time.strftime("%Y-%m-%dT%H-%M")
+
+        experiment_name = f'{experiment_time}_experiment_{n_iter}'
+        # experiment_id = request.request_metadata.experiment_id
+
+        write_folder = Path(output_folder)/(experiment_date +'_'+campaign_name)/experiment_name
+        write_folder.mkdir(exist_ok=True,parents=True)
+        self.settings['_exp_output_dir'] = write_folder
     def _configure_objectives(self):
         """
         Configures the objectives for the Ax planner. This function is expected to be overridden in the child class to propperly set the planning goals.

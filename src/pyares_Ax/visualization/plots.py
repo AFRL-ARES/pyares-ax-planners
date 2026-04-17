@@ -81,5 +81,5 @@ def plot_trials_progress(request:PlanRequest):
             ax1.plot(np.arange(0,len(p['planned_values'])),p['norm_planned'],label=p['name'],marker=next(marker_cycle))
     ax1.legend(loc='center right',fontsize=9)
     fig.tight_layout()
-    fig.savefig(str(write_folder/'plot.png'), dpi=300)
+    fig.savefig(str(write_folder/'params_objective_plot.png'), dpi=300)
     # plt.close('all')
