@@ -55,7 +55,7 @@ def sobo_planner(parameters:list[dict],
             ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
         df = ax_client.get_trials_data_frame()
         folder = settings['_exp_output_dir']
-        df.to_excel(str(folder/'campaign_progress.xlsx',))
+        df.to_excel(str(folder/'campaign_progress.xlsx'),index=False)
     parameterization, _ = ax_client.get_next_trial()
 
     return parameterization
