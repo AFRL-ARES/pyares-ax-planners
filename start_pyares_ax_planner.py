@@ -1,6 +1,6 @@
 from PyAres import AresPlannerService, AresDataType
 # from src.pyares_Ax.ax import PyAres_Ax_Planner
-from pyares_Ax.ax import SOBO_Ax_Planner
+from pyares_Ax.ax import SOBO_Athena as SOBO_Ax_Planner
 
 if __name__ == "__main__":
     plan_object = SOBO_Ax_Planner()
@@ -12,7 +12,12 @@ if __name__ == "__main__":
                                 planner_info['description'],
                                 planner_info['version'],
                                 port=1337)
-
+    
     planner = plan_object.configure_settings(planner)
-    planner.start()
+    try:
+        planner.start()
+    except Exception as e:
+        print(f"An Exception Occured {e}")
+    finally:
+        plan_object.cleanup()
 

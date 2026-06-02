@@ -1,5 +1,6 @@
 from .ax_compatibility import PyAres_Ax_Planner
-from ax.service.ax_client import AxClient, ObjectiveProperties
+from ax.service.ax_client import AxClient
+from ax.service.utils.instantiation import ObjectiveProperties
 from PyAres import AresDataType
 from time import time
 
@@ -57,7 +58,7 @@ def sobo_planner(parameters:list[dict],
         df = ax_client.get_trials_data_frame()
         # This is a bit Hacked in at the moment, need to get some stuff worked out with the metadata handling but this at least gets the data out
         folder = settings['_exp_output_dir']
-        df.to_excel(str(folder/'campaign_progress.xlsx',))
+        df.to_excel(str(folder/'campaign_progress.xlsx'),index=False)
     parameterization, _ = ax_client.get_next_trial()
 
     return parameterization

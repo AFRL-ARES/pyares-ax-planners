@@ -64,6 +64,7 @@ class PyAres_Ax_Planner(object):
         self.parameters = []
         self.implicit_parameters = []
         self.derived_values = []
+        self._latest_metadata = {}
         self._seed_data_df: pd.DataFrame = pd.DataFrame()
         self._planned_df: pd.DataFrame = pd.DataFrame()
         self._acheived_df: pd.DataFrame = pd.DataFrame()
@@ -176,6 +177,7 @@ class PyAres_Ax_Planner(object):
 
         # Start planning, track elapsed time
         start = datetime.now()
+        self._latest_metadata = dict(request.request_metadata.__dict__)
         self._config_ouptut(request)
         self.N_trial = len(request.analysis_results)
         print(f"--- Planning Trial #{self.N_trial} ---")
@@ -196,17 +198,17 @@ class PyAres_Ax_Planner(object):
             print(f'\tFound {len(self._seed_data_df)} points of existing seed data')
         self._process_experimental_data(request)
         if self.verbose:
-            print(f'\tFound {self.N_trial} points of existing experimental data')
+            print(f'\tFound {len(self._planned_df)} points of existing experimental data')
         buffer, handler, logger = self._ax_log_interceptor()
 
-        if self.N_trial == 0:
+        if len(self.data) == 0:
             # Separate logic to handle the first run of the planner for things specified initial conditions
             ares_response, outcome, override_flags = self._plan_first_run(request)
         else:
             override_flags = [False for i in self._ares_parameter_names]
             try:
                 plan_response = self.plan_function(parameters=self._planner_parameters,
-                                                objective=self.objectives,
+                                                objectives=self.objectives,
                                                 constraints=self.constraints,
                                                 data=self.data,
                                                 settings=self.settings)
@@ -407,18 +409,18 @@ class PyAres_Ax_Planner(object):
         ext = file.suffix
         if ext == '.xlsx' or ext == '.xls':
             df = pd.read_excel(str(file))
-        elif ext == 'csv':
+        elif ext == '.csv':
             df = pd.read_csv(str(file))
         else:
             raise Exception('Seed Data file could not be read. File should be an Excel file (.xls, .xlsx) or .csv')
         
-        if not all([i in df.columns for i in self.parameter_names]):
+        if not all([i in df.columns for i in self._ares_parameter_names]):
             raise Exception(f'Could not match all planner parameter names to column headers (case senesitive). \
-                                Planner Parameters: {self.parameter_names} Column Names: {df.columns}')
+                                Planner Parameters: {self._ares_parameter_names} Column Names: {df.columns}')
         if 'objective' not in df.columns:
             raise Exception(f'Could not find a column named "objective" in column headers. Column Names: {df.columns}')
         
-        if not all([i in self.parameter_names + ['objective', 'Index', 'index'] for i in df.columns]):
+        if not all([i in self._ares_parameter_names + ['objective', 'Index', 'index'] for i in df.columns]):
             warnings.warn('Extra columns were found in the seed data file that were not used in planning.')
         
         return df
@@ -504,7 +506,7 @@ class PyAres_Ax_Planner(object):
         # NOTE: This could cause some weird behavior if the planner is state aware and tracking previous values, since we're overwriting what it is sending back without telling it.
             try:
                 plan_response = self.plan_function(parameters=self._planner_parameters,
-                                            objective=self.objectives,
+                                            objectives=self.objectives,
                                             constraints=self.constraints,
                                             data=self.data,
                                             settings=self.settings)
@@ -612,7 +614,7 @@ class PyAres_Ax_Planner(object):
         return data
     
 def plan_function(parameters: list[dict],
-                  objective: dict,
+                  objectives: dict,
                   constraints: list[str],
                   data:list[dict],
                   settings:dict) -> dict:
