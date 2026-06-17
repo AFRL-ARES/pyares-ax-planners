@@ -1,5 +1,6 @@
 from .ax_compatibility import PyAres_Ax_Planner
-from ax.service.ax_client import AxClient, ObjectiveProperties
+from ax.service.ax_client import AxClient
+from ax.service.utils.instantiation import ObjectiveProperties
 from PyAres import AresDataType
 from time import time
 
@@ -8,8 +9,8 @@ class SOBO_Ax_Planner(PyAres_Ax_Planner):
         super().__init__()
         self.name = "SOBO Ax Planner"
         self.description = "Single Objective Bayesian Optimization planner for continuous variables using Ax"
-        self.version_number = "0.1.0"
-        self.plan_function = sobo_planner
+        self.version_number = "0.5.0"
+        self.plan_function = sobo_planner # The Function to call for planning
         self.add_setting('Minimize', AresDataType.BOOLEAN,False)
         self.add_setting("RNG Seed", AresDataType.NUMBER,optional=True) # Sets a seed for the random number generator
 
@@ -29,11 +30,9 @@ def sobo_planner(parameters:list[dict],
         constraints (list[str]): List of Ax planning constraints, should be an array of strings that can be evaluated by sympy with 
                                  variables that match the parameter names 
         data (list): A list of dicts corresonding to previous trials with fields named 'parameters' and 'objectives'
-
     Returns:
         dict: The paramters of the new trial, prediced by the BO planner
     """
-
     # Function to actually plug everything into the Ax API client
     ax_client = AxClient()
     if not isinstance(settings['RNG Seed'],int):
@@ -55,9 +54,10 @@ def sobo_planner(parameters:list[dict],
             _, trial_index = ax_client.attach_trial(parameters=params)
             ax_client.complete_trial(trial_index=trial_index, raw_data=obj_score)
         df = ax_client.get_trials_data_frame()
-        # This is a bit Hacked in at the moment, need to get some stuff worked out with the metadata handling but this at least gets the data out
         folder = settings['_exp_output_dir']
         df.to_excel(str(folder/'campaign_progress.xlsx',))
     parameterization, _ = ax_client.get_next_trial()
 
     return parameterization
+
+

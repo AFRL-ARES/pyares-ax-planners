@@ -12,7 +12,7 @@ if __name__ == "__main__":
                                 planner_info['description'],
                                 planner_info['version'],
                                 port=1337)
-
+    
     planner = plan_object.configure_settings(planner)
     planner.start()
 

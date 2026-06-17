@@ -239,7 +239,7 @@ class PyAres_Ax_Planner(object):
         
         response = PlanResponse(parameter_names=list(ares_response.keys()),
                                 parameter_values=list(ares_response.values()),
-                                planning_outcome=outcome)
+                                outcome=outcome)
         # Plot the results of the last trial
         plot_trials_progress(request)
         return response
