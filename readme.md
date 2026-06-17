@@ -164,3 +164,6 @@ By adhering to this structure, your custom Ax planner will automatically inherit
 
 ## License
 This project is licensed under the MIT License. Copyright (c) 2026 AFRL-ARES.
+
+## Distribution
+**Distribution Statement A**. Approved for public release: distribution is unlimited. AFRL-2026-2820
