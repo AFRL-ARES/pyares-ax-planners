@@ -44,7 +44,7 @@ import sympy as sp
 import re
 import io
 import os
-from ..visualization import plot_trials_progress, BokehIterativeVisualizer
+from ..visualization import BokehIterativeVisualizer
 from bokeh.server.server import Server
 import threading
 # from ax.utils.common.logger import ROOT_STREAM_HANDLER

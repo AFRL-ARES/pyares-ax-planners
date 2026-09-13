@@ -5,13 +5,13 @@ from PyAres import AresDataType, PlanRequest
 from time import time
 from PyAres.Models import AresSchemaEntry
 
-class MOBO_Ax_Planner(PyAres_Ax_Planner):
+class Continuous_BO_Ax_Planner(PyAres_Ax_Planner):
     def __init__(self):
         super().__init__()
-        self.name = "MOBO Ax Planner"
-        self.description = "Multi Objective Bayesian Optimization planner for continuous variables using Ax"
-        self.version_number = "0.1.0"
-        self.plan_function = mobo_planner # The Function to call for planning
+        self.name = "Continuous BO Ax Planner"
+        self.description = "Bayesian optimization planner for continuous variables using Ax"
+        self.version_number = "0.8.0"
+        self.plan_function = cont_bo_planner # The Function to call for planning
 
         # Allows the user to specific the names of objectives to minimize in the service settings. 
         minimize_setting_schema = AresSchemaEntry(type=AresDataType.STRUCT,
@@ -50,7 +50,7 @@ class MOBO_Ax_Planner(PyAres_Ax_Planner):
                 objectives[name] =ObjectiveProperties(minimize=value)
             self.objectives = objectives
 
-def mobo_planner(parameters:list[dict], 
+def cont_bo_planner(parameters:list[dict], 
                  objectives:dict, 
                  constraints:list[str], 
                  data:list[dict],
