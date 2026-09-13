@@ -47,8 +47,6 @@ import os
 from ..visualization import BokehIterativeVisualizer
 from bokeh.server.server import Server
 import threading
-# from ax.utils.common.logger import ROOT_STREAM_HANDLER
-# ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
 class PyAres_Ax_Planner(object):
     """
