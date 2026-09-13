@@ -1,1 +1,1 @@
-from .plots import plot_trials_progress
+from .bokeh_visualizer import BokehIterativeVisualizer

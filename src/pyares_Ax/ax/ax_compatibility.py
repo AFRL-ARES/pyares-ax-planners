@@ -37,12 +37,16 @@ import warnings
 from datetime import datetime
 from ax.service.ax_client import ObjectiveProperties
 import logging 
-from typing import Any, Callable
+from typing import Any, Callable, Optional, Union, Dict
+from PyAres.Models import AresSchemaEntry, Limits
+
 import sympy as sp
 import re
 import io
 import os
-from ..visualization import plot_trials_progress
+from ..visualization import plot_trials_progress, BokehIterativeVisualizer
+from bokeh.server.server import Server
+import threading
 # from ax.utils.common.logger import ROOT_STREAM_HANDLER
 # ROOT_STREAM_HANDLER.setLevel(logging.WARNING) # Supresses Ax INFO messages
 
@@ -70,6 +74,9 @@ class PyAres_Ax_Planner(object):
         # Place Holders for for planner specific information, these should be overridden by child classes
         self.plan_function : Callable = plan_function
         self.planner_input_type : AresDataType = AresDataType.NUMBER
+        self._visualizer = None
+        self._visualizer_server = None
+        self.visualizer_port:int = 5555 # default to 5555
 
         # Generic Planner Info, expected to be overridden by child classes
         self.name : str = 'PyAres Prototype Ax Planner'
@@ -82,10 +89,24 @@ class PyAres_Ax_Planner(object):
         'Seed Data': A string that points to a file (.csv, .xls, .xlsx) containing seed data. This setting will change to support more file types and as 
                     Ares OS's handling of seed data evolves.
         '''
-        self.add_setting(setting_name='Seed Data',setting_type=AresDataType.STRING)
-        self.add_setting(setting_name='Constraints',setting_type=AresDataType.STRING_ARRAY)
-        self.add_setting(setting_name='Implicit Values',setting_type=AresDataType.STRING_ARRAY) 
-        self.add_setting(setting_name='Verbose Output',setting_type=AresDataType.BOOLEAN,default_value=True)
+        # TODO: Update Seed Data Handling when ARES OS data handling is updated
+        self.add_setting(setting_name='Seed Data',
+                         setting_type=AresDataType.STRING,
+                         description="Path to a .csv or excel file of seed data for the planner"
+                         )
+        self.add_setting(setting_name='Constraints',
+                         setting_type=AresDataType.STRING_ARRAY,
+                         description='Mathematical constraints for the planner to apply expressed as a list of SymPy interperable strings'
+                         )
+        self.add_setting(setting_name='Implicit Values',
+                         setting_type=AresDataType.STRING_ARRAY,
+                         description='Implicit/derived values that the planner needs to calculate constraints expressed as a list of SymPy interperable strings'
+                         )
+        self.add_setting(setting_name='Verbose Output',
+                         setting_type=AresDataType.BOOLEAN,
+                         default_value=True,
+                         description='Increases the level of ouput in the service terminal, useful for debugging issues'
+                         )
         # TODO: This only allows for slecting on option or the other. Do we epect the possibility of a mix?
         self.add_setting(setting_name='Parameter Value Type',setting_type=AresDataType.STRING,optional=False,constraints=['Planned','Acheived'],default_value='Planned')
         # NOTE: Once the visualizer service is added this will probably need to be removed/moved
@@ -101,11 +122,16 @@ class PyAres_Ax_Planner(object):
         return {'name':self.name,'version':self.version_number,'description':self.description}
     
 
-    def add_setting(self, setting_name:str, 
-                    setting_type:AresDataType,
+    def add_setting(self, 
+                    setting_name: str, 
+                    setting_type: AresDataType,
+                    default_value: Any = None,
                     optional: bool = True,
-                    constraints: list = [],
-                    default_value:Any= ''):
+                    constraints: Union[list, None] = None,
+                    struct_schema: Optional[Dict[str, AresSchemaEntry]] = None,
+                    list_element_schema: Optional[AresSchemaEntry] = None,
+                    limits: Optional[Limits] = None,
+                    description: Optional[str] = None) -> None:
         """Add a setting to the planner
 
         Args:
@@ -119,7 +145,12 @@ class PyAres_Ax_Planner(object):
                                    'setting_type':setting_type,
                                    'optional':optional,
                                    'constraints':constraints,
-                                   'default_value':default_value})
+                                   'default_value':default_value,
+                                   'struct_schema':struct_schema,
+                                   'list_element_schema':list_element_schema,
+                                   'limits':limits,
+                                   'description':description
+                                   })
 
 
     def configure_settings(self, planner:AresPlannerService) -> AresPlannerService:
@@ -131,12 +162,10 @@ class PyAres_Ax_Planner(object):
         do not have to account for the possibly of a missing value. This behavior may change when PyAres messages
         are updated to support default values.
         '''
-        # TODO: Re-evaluate this once ARES OS and PyARES support communication of default values
         planner.add_supported_type(self.planner_input_type)
         for s in self.settings_list:
             self.settings[s['setting_name']] = s['default_value']
             _s = dict(s)
-            _ = _s.pop('default_value')
             planner.add_setting(_s.pop('setting_name'), _s.pop('setting_type'),**_s)
         return planner
     
@@ -187,7 +216,7 @@ class PyAres_Ax_Planner(object):
 
         # Configure Planning parameters and objectives
         self._configure_parameters(request)
-        self._configure_objectives()
+        self._configure_objectives(request)
         self._configure_constraints()
 
         # Parse seed data and previous trials into a format that is useful for the planner
@@ -206,7 +235,7 @@ class PyAres_Ax_Planner(object):
             override_flags = [False for i in self._ares_parameter_names]
             try:
                 plan_response = self.plan_function(parameters=self._planner_parameters,
-                                                objective=self.objectives,
+                                                objectives=self.objectives,
                                                 constraints=self.constraints,
                                                 data=self.data,
                                                 settings=self.settings)
@@ -240,8 +269,24 @@ class PyAres_Ax_Planner(object):
         response = PlanResponse(parameter_names=list(ares_response.keys()),
                                 parameter_values=list(ares_response.values()),
                                 outcome=outcome)
-        # Plot the results of the last trial
-        plot_trials_progress(request)
+        if self.N_trial >=1:
+            # If the Bokeh visualizer hasn't been started yet, start it, otherwise, update it
+            if self._visualizer is None:
+                self._visualizer = BokehIterativeVisualizer(self._ares_parameter_names,
+                                                            self.objective_names,
+                                                            {k:self.objectives[k].minimize for k in self.objectives},
+                                                            {item['name']:item['bounds'] for item in self._ares_parameters}
+                )
+                self._visualizer_server = Server({"/": self._visualizer.bkapp}, port=self.visualizer_port,allow_websocket_origin=["*"])
+                self._visualizer_server.start()
+                io_thread = threading.Thread(target=self._visualizer_server.io_loop.start)
+                io_thread.daemon = True
+                io_thread.start()
+
+            self._visualizer.push_update(self.data_df)
+            self._visualizer.save_snapshot(str(self.settings['_exp_output_dir']))
+
+        # plot_trials_progress(request)
         return response
     
     ### Support functions - Not intended for general interfacing
@@ -251,7 +296,6 @@ class PyAres_Ax_Planner(object):
         output_folder = request.settings['Output Folder']
         campaign_name = request.request_metadata.campaign_name
         n_iter = len(request.analysis_results)
-        # TODO: possible issues with this if the day ticks over during a campaign. Can we send over the campaign start time as well?
         experiment_time = datetime.strptime(request.request_metadata.experiment_start_time, "%Y-%m-%d %H:%M:%S")
         experiment_date = experiment_time.strftime("%Y-%m-%d") # Just getting the YMD to put in the name for easy sorting
         experiment_time = experiment_time.strftime("%Y-%m-%dT%H-%M")
@@ -262,18 +306,17 @@ class PyAres_Ax_Planner(object):
         write_folder = Path(output_folder)/(experiment_date +'_'+campaign_name)/experiment_name
         write_folder.mkdir(exist_ok=True,parents=True)
         self.settings['_exp_output_dir'] = write_folder
-    def _configure_objectives(self):
+
+    def _configure_objectives(self,request: PlanRequest):
         """
         Configures the objectives for the Ax planner. This function is expected to be overridden in the child class to propperly set the planning goals.
 
-        Note: Due to the current structure of the PlanRequest message, PyAres only officially supports single-objective planning at the moment
-        this constriaint should be relaxed in a future release
         """
-        # TODO: Update once support for multiple objectives is better supported by ARES OS/PyAres
+
         self.objectives = {'objective':ObjectiveProperties(minimize=False)} 
 
     ## General support functions, may be overridden if necessary but shouldn't need to be for most use cases
-    def _configure_parameters(self,request):
+    def _configure_parameters(self,request: PlanRequest):
         '''
         This function pasrses input parameters, constraints, and implicit values to figure out what to pass to the planner routine as well as 
         building the definitions for the translation layer for calculating implicit parameters
@@ -358,19 +401,28 @@ class PyAres_Ax_Planner(object):
         Args:
             request (PlanRequest): PyAres Planning request
         """
-        cols = self._ares_parameter_names + list(self.objectives.keys())
+        
+        cols = self._ares_parameter_names + self.objective_names
         planned_df = pd.DataFrame(columns=cols)
         achieved_df = pd.DataFrame(columns=cols)
         for p in request.parameters:
-            planned_df[p.name] = [p.param_history[i].planned_value for i in range(len(request.analysis_results))]
-            achieved_df[p.name] = [p.param_history[i].achieved_value for i in range(len(request.analysis_results))]
-        # TODO: rework when mulit-objective planning is implemented
-        planned_df['objective'] = request.analysis_results
-        achieved_df['objective'] = request.analysis_results
+            planned_df[p.name] = [p.param_history[i].planned_value for i in range(len(request.analysis_objectives))]
+            achieved_df[p.name] = [p.param_history[i].achieved_value for i in range(len(request.analysis_objectives))]
+
+        # NOTE: Not the cleanest way to do this, but ultimately i think a better way to go about it is to make a helper function in PyAres
+        #       that provies the objective values in a friendlier format.
+        objective_values_dict = {o:[] for o in self.objective_names}
+        for iter in request.analysis_data:
+            for objective in iter.analysis_objectives:
+                if objective.objective_name in self.objective_names:
+                    objective_values_dict[objective.objective_name].append(objective.objective_value)
+
+        for o in self.objective_names: 
+            planned_df[o] = objective_values_dict[o]
+            achieved_df[o] = objective_values_dict[o]
         
         self._acheived_df = achieved_df
         self._planned_df = planned_df
-
 
     def _process_seed_data(self):
         """
@@ -504,7 +556,7 @@ class PyAres_Ax_Planner(object):
         # NOTE: This could cause some weird behavior if the planner is state aware and tracking previous values, since we're overwriting what it is sending back without telling it.
             try:
                 plan_response = self.plan_function(parameters=self._planner_parameters,
-                                            objective=self.objectives,
+                                            objectives=self.objectives,
                                             constraints=self.constraints,
                                             data=self.data,
                                             settings=self.settings)
@@ -568,7 +620,10 @@ class PyAres_Ax_Planner(object):
     @property 
     def parameter_names(self) -> list[str]:
         return list([p['name'] for p in self.parameters])
-    
+
+    @property
+    def objective_names(self) -> list[str]:
+        return list(self.objectives.keys())
     @property 
     def _ares_parameter_names(self) -> list[str]:
         return list([p['name'] for p in self._ares_parameters])
@@ -610,6 +665,10 @@ class PyAres_Ax_Planner(object):
             data.append({'parameters':p_dict[i],
                          'objectives':o_dict[i]})
         return data
+    @property
+    def data_df(self)-> pd.DataFrame:
+        data = self.data
+        return pd.DataFrame([i['parameters']|i['objectives'] for i in data])
     
 def plan_function(parameters: list[dict],
                   objective: dict,
