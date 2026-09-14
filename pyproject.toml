@@ -9,18 +9,19 @@ include = ["pyares_Ax*"]
 
 [project]
 name = "pyares-Ax"
-version = "0.4.0"
+version = "0.8.0"
 requires-python = ">= 3.11"
 authors = [{ name = "AFRL", email = "AFRL.RX.AREScontact@us.af.mil" }]
-description = "PyAres Compatible Baysian Optimizaiton Planners based on Meta's Ax API"
+description = "PyAres Compatible Baysian Optimization Planners based on Meta's Ax API"
 license = "MIT"
 dependencies = [
-    "PyAres (>=1.0.0b1)",
+    "PyAres (>=1.3.0b2)",
     "ax-platform (>=1.2.0)",
     "pandas (>=3.0.0)",
     "matplotlib (>=3.10.0)",
     "sympy (>=1.14.0)",
-    "openpyxl (>=3.0.0)",
+    "openpyxl (>=3.0.0)"
+    "bokeh (>=3.10.0),
 ]
 readme = "readme.md"
 
