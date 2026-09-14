@@ -5,10 +5,9 @@ This repository contains methods and examples for using Bayesian optimization pl
 ## Features
 * **Custom Constraints**: Supports the use of implicit values within constraints and evaluates constraint strings via SymPy prior to planning.
 * **Implicit Values & Parameters**: Supports planning with implicit variables in cases where constraints mandate that some pramters coming from ARES OS are dependent on other paramters. You can define implicit values using SymPy-compatible string expressions (e.g., `"flow_4 = total_flow - (flow_1 + flow_2 + flow_3)"`). 
-* **Previous Data**: Can import prior experimental seed data from `.csv`, `.xls`, or `.xlsx` files. Column headers should match ARES OS provided parameter names, with the objective score value column labeled `objective`
 
 ## Currently Implemented Planners
-* **Single Objective Bayesian Optimization (SOBO)**:`SOBO_Ax_Planner` provides single objective optimization for continuous variables.
+* **Bayesian Optimization (BO) for continuous variables**:`Continuous_BO_Ax_Planner` provides single or multi-objective optimization for continuous variables.
 
 * More to come!
 
@@ -60,25 +59,32 @@ This project requires **Python >=3.11**. A dedicated environment is highly recom
 
 ## Quick Start
 
-To launch the planner service, run the provided startup script:
+To launch the planner service, run the provided startup scripts:
 ```bash
-python start_pyares_ax_planner.py
+python start_pyares_mobo_planner.py
 ```
-This script initializes the `SOBO_Ax_Planner` and starts the `AresPlannerService` on port `1337`.
+or 
+```bash
+python start_pyares_sobo_planner.py
+```
+
+Which initializes the `Continuous_BO_Ax_Planner` configured for single or multi-objective optimizatio and starts the `AresPlannerService`.
+Both scripts support the following options for easy configuration at lauch time:
+* `-p`: The network port to host the planner service on. (Default: 1337 (SOBO) 1336 (MOBO))
+* `-l`: Whether to host the service only on localhost. (Default: True) 
+* `-bp`: the network port for the built in Bokeh-based visualizer for tracking experiment progress. (Default: 2337 (SOBO) 2336 (MOBO))
+
 
 ## Planner Settings
 
 The `PyAres_Ax_Planner` exposes several settings by defualt that can be configured directly from ARES OS:
 
-* **Seed Data**: A string path pointing to a `.csv`, `.xls`, or `.xlsx` file containing historical trial data.
 * **Constraints**: An array of string constraints evaluated by SymPy.
 * **Implicit Values**: An array of string definitions for calculating implicit factors and parameters.
 * **Parameter Value Type**: A string restricted to either `'Planned'` or `'Acheived'` (Default: `'Planned'`).
 * **Verbose Output**: A boolean to toggle detailed logging in the console (Default: `True`).
 
 Specific planner instances can implement additonal settings.
-
-Here is the section you can add to the README file to guide developers on how to implement their own custom planners using the framework.
 
 ***
 
@@ -131,7 +137,8 @@ def my_custom_planner_logic(parameters: list[dict],
                             objective: dict, 
                             constraints: list[str], 
                             data: list[dict],
-                            settings: dict) -> dict:
+                            settings: dict,
+                            batch_size:int=1) -> dict:
     """
     Args:
         parameters: List of Ax formatted parameters
@@ -153,8 +160,8 @@ def my_custom_planner_logic(parameters: list[dict],
         _, trial_index = ax_client.attach_trial(parameters=trial['parameters'])
         ax_client.complete_trial(trial_index=trial_index, raw_data=trial['objectives'])
         
-    # 3. Generate the next trial
-    parameterization, _ = ax_client.get_next_trial()
+    # 3. Generate the next N trials (depends on batch size set within ARES OS )
+    parameterization, _ = ax_client.get_next_trials(max_trials=batch_size)
     
     # 4. Return the predicted parameters
     return parameterization

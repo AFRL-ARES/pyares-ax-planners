@@ -54,7 +54,8 @@ def cont_bo_planner(parameters:list[dict],
                  objectives:dict, 
                  constraints:list[str], 
                  data:list[dict],
-                 settings:dict) -> dict:
+                 settings:dict,
+                 batch_size:int=1) -> dict:
     """
         Args:
             parameters (list[dict]): List of Ax formatted parameters
@@ -62,6 +63,7 @@ def cont_bo_planner(parameters:list[dict],
             constraints (list[str]): List of Ax planning constraints, should be an array of strings that can be evaluated by sympy with 
                                     variables that match the parameter names 
             data (list): A list of dicts corresonding to previous trials with fields named 'parameters' and 'objectives'
+            batch_size (int): How many trials to plan at one time
         Returns:
             dict: The paramters of the new trial, prediced by the BO planner
         """
@@ -88,6 +90,6 @@ def cont_bo_planner(parameters:list[dict],
         df = ax_client.get_trials_data_frame()
         folder = settings['_exp_output_dir']
         df.to_excel(str(folder/'campaign_progress.xlsx',))
-    parameterization, _ = ax_client.get_next_trial()
+    parameterization, _ = ax_client.get_next_trials(max_trials=batch_size)
 
     return parameterization

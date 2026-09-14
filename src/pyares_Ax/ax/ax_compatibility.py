@@ -30,7 +30,7 @@
 # 
 ###
 
-from PyAres import PlanRequest, PlanResponse, AresDataType, Outcome, AresPlannerService
+from PyAres import PlanRequest, PlanResponse, AresDataType, Outcome, AresPlannerService, Plan, PlannedParameter
 from pathlib import Path
 import pandas as pd
 import warnings
@@ -168,7 +168,7 @@ class PyAres_Ax_Planner(object):
         return planner
     
 
-    def call_planner(self,request: PlanRequest) -> PlanResponse:
+    def call_planner(self,request: PlanRequest) -> list[Plan]|PlanResponse:
         """
         Generic planner calling function that manages sorting all of the data contained in the incoming
         plan request object into a format that is more compaitble with how Ax-based planners want their data.
@@ -205,7 +205,12 @@ class PyAres_Ax_Planner(object):
         start = datetime.now()
         self._config_ouptut(request)
         self.N_trial = len(request.analysis_results)
-        print(f"--- Planning Trial #{self.N_trial} ---")
+        self.trial_range = list([i+self.N_trial for i in range(request.batch_size)])
+        if request.batch_size == 1:
+            print(f"--- Planning Trial #{self.N_trial} ---")
+        else:
+            print(f"--- Planning Trial #{self.trial_range[0]} - #{self.trial_range[-1]} (Batch Size = {request.batch_size})---")
+                    
         print(f' Planning Started at: {start.strftime("%Y-%m-%d %H:%M:%S")}')
         # Updates settings from the request and parses a few essential values
         self.settings.update(request.settings)
@@ -232,42 +237,59 @@ class PyAres_Ax_Planner(object):
         else:
             override_flags = [False for i in self._ares_parameter_names]
             try:
+                # NOTE: With batch planning response from the plan function will be a nested dict with top level
+                #       keys corresponding to the iteration number and each entry represning the trial dict
                 plan_response = self.plan_function(parameters=self._planner_parameters,
                                                 objectives=self.objectives,
                                                 constraints=self.constraints,
                                                 data=self.data,
-                                                settings=self.settings)
+                                                settings=self.settings,
+                                                batch_size=request.batch_size)
                 outcome= Outcome.SUCCESS
             except Exception as e:
                 print(f' Planning Failed with error:{e}')
-                plan_response = {p:-1 for p in self.parameter_names}
+                plan_response = {n:{p:-1 for p in self.parameter_names} for n in self.trial_range}
                 outcome = Outcome.FAILURE
             ares_response = self._convert_plan_to_ares(plan_response)
+
+        # Capture Ax output for verbose output setting
         captured_text = buffer.getvalue()
         if self.verbose:
             print("\n~~~ Begin Ax logs ~~~")
             print(captured_text.replace('\n','\n\t'))
             print("~~~ End Ax Ax logs ~~~\n")
-    
         # Clean up when done
         logger.removeHandler(handler)
         buffer.close()
-        
-        print("Proposed test condition:")
-        for i,(n,v) in enumerate(zip(ares_response.keys(), ares_response.values())):
-            if override_flags[i]:
-                 print(f"\t{n} = {v:.3f} (Overriden by supplied inital value)")
-            else:
-                print(f"\t{n} = {v:.3f}")
+
+        # Print new conditions to terminal output
+        print(" Proposed test condition(s):")
+        for i in self.trial_range:
+            if request.batch_size > 1:
+                print(f" ~~~ Trial # {i}: ~~~")
+            for j,(n,v) in enumerate(zip(ares_response[i].keys(), ares_response[i].values())):
+                if override_flags[j] and self.N_trial == 0 and i == 0 :
+                    print(f"\t{n} = {v:.3f} (Overriden by supplied inital value)")
+                else:
+                    print(f"\t{n} = {v:.3f}")
 
         end = datetime.now()
         delta= end-start
-        print(f"--- End Planning for Trial #{self.N_trial} (Took {delta.total_seconds()}) seconds---")
-        
-        response = PlanResponse(parameter_names=list(ares_response.keys()),
-                                parameter_values=list(ares_response.values()),
-                                outcome=outcome)
-        if self.N_trial >=1:
+        if request.batch_size == 1:
+            print(f"--- End Planning for Trial #{self.N_trial} (Took {delta.total_seconds()}) seconds---")
+        else:
+            print(f"--- End Planning for Trials #{self.trial_range[0]} - #{self.trial_range[-1]} (Took {delta.total_seconds()}) seconds---")
+
+        plan_list = []
+        for n in self.trial_range:
+            batch_item = ares_response[n]
+            param_list = [PlannedParameter(parameter_name=k,parameter_value=v) for (k,v) in zip(batch_item.keys(),batch_item.values())]
+            plan_list.append(Plan(planned_parameters=param_list,outcome=outcome))
+
+        # response = PlanResponse(parameter_names=list(ares_response.keys()),
+        #                         parameter_values=list(ares_response.values()),
+        #                         outcome=outcome)
+        if self.N_trial >= 1:
             # If the Bokeh visualizer hasn't been started yet, start it, otherwise, update it
             if self._visualizer is None:
                 self._visualizer = BokehIterativeVisualizer(self._ares_parameter_names,
@@ -285,7 +307,7 @@ class PyAres_Ax_Planner(object):
             self._visualizer.save_snapshot(str(self.settings['_exp_output_dir']))
 
         # plot_trials_progress(request)
-        return response
+        return plan_list
     
     ### Support functions - Not intended for general interfacing
     ##Override these functions when configuring your planner subclass
@@ -539,6 +561,8 @@ class PyAres_Ax_Planner(object):
     
 
     def _plan_first_run(self,request: PlanRequest) -> tuple[dict,Outcome,list]:
+        response = []
+
         initial_conditions = self._get_initial_conditions(request)
             # If all parameters are present in the initial conditions response, skip planning
             # Planners could be aware of their own history so we don't want to call the planner unecessarily.
@@ -552,16 +576,18 @@ class PyAres_Ax_Planner(object):
         # and overwrite the ones that we have initial values for.
         
         # NOTE: This could cause some weird behavior if the planner is state aware and tracking previous values, since we're overwriting what it is sending back without telling it.
+
             try:
                 plan_response = self.plan_function(parameters=self._planner_parameters,
                                             objectives=self.objectives,
                                             constraints=self.constraints,
                                             data=self.data,
-                                            settings=self.settings)
+                                            settings=self.settings,
+                                            batch_size=request.batch_size)
                 outcome= Outcome.SUCCESS
             except Exception as e:
                 print(f' Planning Failed with error:{e}')
-                plan_response = {p:-1 for p in self._planner_parameter_names}
+                plan_response = {n:{p:-1 for p in self.parameter_names} for n in range(request.batch_size)}
                 outcome = Outcome.FAILURE
 
         ares_response = self._convert_plan_to_ares(plan_response) # Convert parameter set if necessary
@@ -569,12 +595,13 @@ class PyAres_Ax_Planner(object):
         # NOTE: Inital condition overrides coming from ARES OS are given priority and ignore any relational constraints for implicit parameters
         for i, name in enumerate(self._ares_parameter_names):
             if name in initial_conditions:
-                ares_response[name] = initial_conditions[name]
+                ares_response[0][name] = initial_conditions[name]
                 initial_condition_override[i] = True
-        
+
+        # response.append((ares_response, outcome, initial_condition_override))
+
         return (ares_response, outcome, initial_condition_override)
     
-
     def _get_initial_conditions(self,request: PlanRequest) -> dict:
         response = dict()
         for p in request.parameters:
@@ -592,16 +619,23 @@ class PyAres_Ax_Planner(object):
         Returns:
             dict: Response with ARES Parameters
         """
-        ares_response = dict()
+        
         if self._ares_parameter_names == self._planner_parameter_names:
             ares_response = response
         else:
-            for p in self._ares_parameter_names:
-                if p in self._planner_parameter_names:
-                    ares_response[p] = response[p]
-                else:
-                    ares_response[p] = self._eval_implicit(response,p)
-        
+            ares_response = dict()
+            for n in response.keys():
+                batch_item = response[n]
+                batch_response = dict()
+            
+                for p in self._ares_parameter_names:
+                    if p in self._planner_parameter_names:
+                        batch_response[p] = batch_item[p]
+                    else:
+                        batch_response[p] = self._eval_implicit(batch_item,p)
+
+                ares_response[n] = batch_response
+                
         return ares_response
 
     def _ax_log_interceptor(self):
