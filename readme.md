@@ -5,6 +5,7 @@ This repository contains methods and examples for using Bayesian optimization pl
 ## Features
 * **Custom Constraints**: Supports the use of implicit values within constraints and evaluates constraint strings via SymPy prior to planning.
 * **Implicit Values & Parameters**: Supports planning with implicit variables in cases where constraints mandate that some pramters coming from ARES OS are dependent on other paramters. You can define implicit values using SymPy-compatible string expressions (e.g., `"flow_4 = total_flow - (flow_1 + flow_2 + flow_3)"`). 
+* **Interactive Web Visualizer**: Hosts a local web-based visualizer powered by [Bokeh](https://bokeh.org/) allowing you to visuzlize conditions, results, and pareto fronts in real time.
 
 ## Currently Implemented Planners
 * **Bayesian Optimization (BO) for continuous variables**:`Continuous_BO_Ax_Planner` provides single or multi-objective optimization for continuous variables.
