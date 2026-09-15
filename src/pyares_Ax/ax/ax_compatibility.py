@@ -44,7 +44,7 @@ import sympy as sp
 import re
 import io
 import os
-from ..visualization import BokehIterativeVisualizer
+from ..visualization import BokehIterativeVisualizer, VisualizerServerManager
 from bokeh.server.server import Server
 import threading
 
@@ -75,6 +75,9 @@ class PyAres_Ax_Planner(object):
         self._visualizer = None
         self._visualizer_server = None
         self.visualizer_port:int = 5555 # default to 5555
+        self._visualizer_manager = None
+        self._campaign_start = ''
+
 
         # Generic Planner Info, expected to be overridden by child classes
         self.name : str = 'PyAres Prototype Ax Planner'
@@ -289,24 +292,23 @@ class PyAres_Ax_Planner(object):
         # response = PlanResponse(parameter_names=list(ares_response.keys()),
         #                         parameter_values=list(ares_response.values()),
         #                         outcome=outcome)
+        if self._visualizer_manager is None:
+            self._visualizer_manager = VisualizerServerManager(port=self.visualizer_port)
+
         if self.N_trial >= 1:
-            # If the Bokeh visualizer hasn't been started yet, start it, otherwise, update it
-            if self._visualizer is None:
-                self._visualizer = BokehIterativeVisualizer(self._ares_parameter_names,
-                                                            self.objective_names,
-                                                            {k:self.objectives[k].minimize for k in self.objectives},
-                                                            {item['name']:item['bounds'] for item in self._ares_parameters}
-                )
-                self._visualizer_server = Server({"/": self._visualizer.bkapp}, port=self.visualizer_port,allow_websocket_origin=["*"])
-                self._visualizer_server.start()
-                io_thread = threading.Thread(target=self._visualizer_server.io_loop.start)
-                io_thread.daemon = True
-                io_thread.start()
+            # If the Bokeh visualizer hasn't been started yet or a new campagin is detected start it, otherwise, update it
+            self._visualizer = self._visualizer_manager.sync_instance(
+                        instance_id=request.request_metadata.campaign_start_time,
+                        visualizer_cls=BokehIterativeVisualizer, 
+                        param_cols=self._ares_parameter_names,
+                        resp_cols=self.objective_names,
+                        resp_opt_dict={k:self.objectives[k].minimize for k in self.objectives},
+                        param_bounds={item['name']:item['bounds'] for item in self._ares_parameters}
+                    )
 
-            self._visualizer.push_update(self.data_df)
-            self._visualizer.save_snapshot(str(self.settings['_exp_output_dir']))
+            self._visualizer_manager.push_update(self.data_df)
+            self._visualizer_manager.save_snapshot(str(self.settings['_exp_output_dir']))
 
-        # plot_trials_progress(request)
         return plan_list
     
     ### Support functions - Not intended for general interfacing
@@ -338,7 +340,7 @@ class PyAres_Ax_Planner(object):
     ## General support functions, may be overridden if necessary but shouldn't need to be for most use cases
     def _configure_parameters(self,request: PlanRequest):
         '''
-        This function pasrses input parameters, constraints, and implicit values to figure out what to pass to the planner routine as well as 
+        This function parses input parameters, constraints, and implicit values to figure out what to pass to the planner routine as well as 
         building the definitions for the translation layer for calculating implicit parameters
 
         The logic of this process is as folows:

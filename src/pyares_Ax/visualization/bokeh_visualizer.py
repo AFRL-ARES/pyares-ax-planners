@@ -15,7 +15,9 @@ from bokeh.models import (
 )
 from bokeh.palettes import Category10, Category20, Viridis256
 from bokeh.plotting import figure, output_file, save
+from bokeh.server.server import Server
 from pathlib import Path
+
 
 
 class ThreadSafeDataStore:
@@ -592,3 +594,79 @@ class BokehIterativeVisualizer:
                 else [0.5] * len(df)
             )
         return data
+
+class VisualizerServerManager:
+
+    def __init__(self, port=5006):
+        self.port = port
+        self.current_instance_id = None
+        self.server = None
+        self.io_thread = None
+        self.visualizer = None
+        self._lock = threading.Lock()
+
+    def sync_instance(self, instance_id, visualizer_cls, **visualizer_kwargs):
+        """Checks if instance_id has changed.
+
+        If changed, cleanly tears down the running server and starts a new
+        instance with updated parameter schemas.
+        """
+        with self._lock:
+            # If instance ID matches and server is alive, return current visualizer
+            if self.current_instance_id == instance_id and self.server:
+                return self.visualizer
+
+            # Teardown active server on instance ID mismatch
+            if self.server:
+                self._stop_server_unlocked()
+
+            # Instantiate new visualizer with new parameters/meshgrids
+            self.visualizer = visualizer_cls(**visualizer_kwargs)
+
+            # Re-bind Bokeh Server on port
+            self.server = Server(
+                {"/": self.visualizer.bkapp},
+                port=self.port,
+                allow_websocket_origin=["*"],
+            )
+            self.server.start()
+
+            # Launch Tornado I/O loop in background thread
+            self.io_thread = threading.Thread(
+                target=self.server.io_loop.start
+            )
+            self.io_thread.daemon = True
+            self.io_thread.start()
+
+            self.current_instance_id = instance_id
+            return self.visualizer
+
+    def _stop_server_unlocked(self):
+        """Tears down Tornado I/O loop and unbinds port socket."""
+        if self.server:
+            # 1. Unbind listening socket
+            self.server.stop()
+
+            # 2. Schedule thread-safe stop callback on Tornado loop
+            if self.server.io_loop:
+                self.server.io_loop.add_callback(self.server.io_loop.stop)
+
+            # 3. Wait for background IO thread to terminate
+            if self.io_thread and self.io_thread.is_alive():
+                self.io_thread.join(timeout=3.0)
+
+            self.server = None
+            self.io_thread = None
+            self.visualizer = None
+
+    def push_update(self, df):
+        """Pushes data update to active visualizer."""
+        with self._lock:
+            if self.visualizer:
+                self.visualizer.push_update(df)
+
+    def save_snapshot(self, filepath):
+        """Saves offline snapshot using active visualizer."""
+        with self._lock:
+            if self.visualizer:
+                self.visualizer.save_snapshot(filepath)
