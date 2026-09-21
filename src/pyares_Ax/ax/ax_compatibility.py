@@ -289,9 +289,6 @@ class PyAres_Ax_Planner(object):
             param_list = [PlannedParameter(parameter_name=k,parameter_value=v) for (k,v) in zip(batch_item.keys(),batch_item.values())]
             plan_list.append(Plan(planned_parameters=param_list,outcome=outcome))
 
-        # response = PlanResponse(parameter_names=list(ares_response.keys()),
-        #                         parameter_values=list(ares_response.values()),
-        #                         outcome=outcome)
         if self._visualizer_manager is None:
             self._visualizer_manager = VisualizerServerManager(port=self.visualizer_port)
 
@@ -300,7 +297,7 @@ class PyAres_Ax_Planner(object):
             self._visualizer = self._visualizer_manager.sync_instance(
                         instance_id=request.request_metadata.campaign_start_time,
                         visualizer_cls=BokehIterativeVisualizer, 
-                        param_cols=self._ares_parameter_names,
+                        param_cols=self._planner_parameter_names,
                         resp_cols=self.objective_names,
                         resp_opt_dict={k:self.objectives[k].minimize for k in self.objectives},
                         param_bounds={item['name']:item['bounds'] for item in self._ares_parameters}
@@ -600,7 +597,6 @@ class PyAres_Ax_Planner(object):
                 ares_response[0][name] = initial_conditions[name]
                 initial_condition_override[i] = True
 
-        # response.append((ares_response, outcome, initial_condition_override))
 
         return (ares_response, outcome, initial_condition_override)
     

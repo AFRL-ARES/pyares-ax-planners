@@ -1,4 +1,5 @@
 import threading
+from pathlib import Path
 import numpy as np
 import pandas as pd
 
@@ -16,8 +17,6 @@ from bokeh.models import (
 from bokeh.palettes import Category10, Category20, Viridis256
 from bokeh.plotting import figure, output_file, save
 from bokeh.server.server import Server
-from pathlib import Path
-
 
 
 class ThreadSafeDataStore:
@@ -62,7 +61,7 @@ class BokehIterativeVisualizer:
         return {item: palette[i % len(palette)] for i, item in enumerate(items)}
 
     # -------------------------------------------------------------------------
-    # Pareto Front Calculation Logic
+    # Pareto Front & Hypervolume Calculation Logic
     # -------------------------------------------------------------------------
     def _calc_2d_pareto_data(self, data, x_resp, y_resp):
         """Calculates 2D Pareto optimal points considering ONLY x_resp and y_resp."""
@@ -100,14 +99,13 @@ class BokehIterativeVisualizer:
         if not data or "iteration" not in data or len(data["iteration"]) == 0:
             return []
 
-        # Construct matrix normalized for minimization space
         resps_matrix = []
         for r in self.resp_cols:
             vals = np.array(data[f"{r}_raw"])
             is_min = self.resp_opt_dict.get(r, True)
             resps_matrix.append(vals if is_min else -vals)
 
-        M = np.column_stack(resps_matrix)  # Shape: (N_samples, N_responses)
+        M = np.column_stack(resps_matrix)
         n_points = len(M)
 
         idx = []
@@ -146,6 +144,79 @@ class BokehIterativeVisualizer:
 
         return res
 
+    def _calc_hypervolume(self, points, ref_point):
+        """Calculates exact N-dimensional hypervolume in standard minimization space."""
+        if len(points) == 0:
+            return 0.0
+
+        dim = points.shape[1]
+        if dim == 1:
+            return max(0.0, float(ref_point[0] - np.min(points[:, 0])))
+
+        if dim == 2:
+            pts = points[np.argsort(points[:, 0])]
+            hv = 0.0
+            last_y = float(ref_point[1])
+            for p in pts:
+                if p[1] < last_y:
+                    hv += (float(ref_point[0]) - p[0]) * (last_y - p[1])
+                    last_y = p[1]
+            return hv
+
+        # N-D Exact recursive dimension reduction
+        pts = points[np.argsort(points[:, 0])]
+        hv = 0.0
+        n = len(pts)
+        for i in range(n):
+            width = (
+                float(ref_point[0] - pts[i, 0])
+                if i == n - 1
+                else float(pts[i + 1, 0] - pts[i, 0])
+            )
+            if width > 0:
+                sub_pts = pts[: i + 1, 1:]
+                hv += width * self._calc_hypervolume(sub_pts, ref_point[1:])
+        return hv
+
+    def _calc_hv_data(self, data):
+        """Calculates cumulative hypervolume indicator history vs iteration."""
+        if not data or "iteration" not in data or len(data["iteration"]) == 0:
+            return {"iteration": [], "hypervolume": []}
+
+        iterations = data["iteration"]
+        n_samples = len(iterations)
+
+        # Normalize objectives to [0, 1] minimization space (0 = optimal, 1 = worst)
+        resps_matrix = []
+        for r in self.resp_cols:
+            vals = np.array(data[f"{r}_norm"])
+            is_min = self.resp_opt_dict.get(r, True)
+            norm_vals = vals if is_min else (1.0 - vals)
+            resps_matrix.append(norm_vals)
+
+        M = np.column_stack(resps_matrix)
+        ref_point = np.full(len(self.resp_cols), 1.1)
+
+        hv_history = []
+        for k in range(1, n_samples + 1):
+            sub_M = M[:k]
+            n_pts = len(sub_M)
+            idx = []
+            for i in range(n_pts):
+                dominated = any(
+                    np.all(sub_M[j] <= sub_M[i]) and np.any(sub_M[j] < sub_M[i])
+                    for j in range(n_pts)
+                    if j != i
+                )
+                if not dominated:
+                    idx.append(i)
+
+            pareto_pts = sub_M[idx]
+            hv_val = self._calc_hypervolume(pareto_pts, ref_point)
+            hv_history.append(hv_val)
+
+        return {"iteration": iterations, "hypervolume": hv_history}
+
     # -------------------------------------------------------------------------
     # Layout and Visualization Builders
     # -------------------------------------------------------------------------
@@ -176,9 +247,11 @@ class BokehIterativeVisualizer:
 
         p2d_data = self._calc_2d_pareto_data(data, x_resp, y_resp)
         pnd_data = self._calc_nd_pareto_data(data, x_resp, y_resp)
+        hv_data = self._calc_hv_data(data)
 
         pareto_2d_source = ColumnDataSource(data=p2d_data)
         pareto_nd_source = ColumnDataSource(data=pnd_data)
+        hv_source = ColumnDataSource(data=hv_data)
 
         p1, p2 = self._build_ts_plots(source)
         (
@@ -193,10 +266,14 @@ class BokehIterativeVisualizer:
             x_resp, y_resp, source, pareto_2d_source, pareto_nd_source
         )
 
+        # Build Hypervolume progress figure with linked X-axis
+        p_hv = self._build_hv_plot(hv_source, x_range=p1.x_range)
+
         ts_layout = column(p1, p2, sizing_mode="stretch_width")
         pareto_layout = column(
             row(x_select, y_select, sizing_mode="stretch_width"),
             p_pareto,
+            p_hv,
             pareto_table,
             sizing_mode="stretch_width",
         )
@@ -213,6 +290,7 @@ class BokehIterativeVisualizer:
             source,
             pareto_2d_source,
             pareto_nd_source,
+            hv_source,
             x_select,
             y_select,
             p_pareto,
@@ -345,7 +423,7 @@ class BokehIterativeVisualizer:
             title="Pareto Front Analysis",
             x_axis_label=f"{x_resp}",
             y_axis_label=f"{y_resp}",
-            height=450,
+            height=400,
             sizing_mode="stretch_width",
         )
         self.style_figure(
@@ -363,7 +441,7 @@ class BokehIterativeVisualizer:
             legend_label="All Iterations",
         )
 
-        # 2. 2-Dimensional Pareto Front (Line + Open Scatter)
+        # 2. 2-Dimensional Pareto Front
         p_pareto.line(
             x="x",
             y="y",
@@ -383,7 +461,7 @@ class BokehIterativeVisualizer:
             legend_label="2D Optimal",
         )
 
-        # 3. N-Dimensional Pareto Front (Gold Stars)
+        # 3. N-Dimensional Pareto Front
         pareto_nd_scatter = p_pareto.scatter(
             x="x",
             y="y",
@@ -450,6 +528,56 @@ class BokehIterativeVisualizer:
             pareto_table,
         )
 
+    def _build_hv_plot(self, hv_source, x_range=None):
+        """Creates the Hypervolume vs Iteration progress figure."""
+        p_hv = figure(
+            title="Hypervolume Indicator Progress",
+            x_axis_label="Iteration",
+            y_axis_label="Hypervolume Indicator",
+            x_range=x_range,  # LINKED X-AXIS with Time Series plots
+            height=300,
+            sizing_mode="stretch_width",
+        )
+        self.style_figure(
+            p_hv, title_size="14pt", label_size="12pt", tick_size="10pt"
+        )
+
+        p_hv.line(
+            x="iteration",
+            y="hypervolume",
+            source=hv_source,
+            color="purple",
+            line_width=2,
+            legend_label="Hypervolume",
+        )
+        r_scat = p_hv.scatter(
+            x="iteration",
+            y="hypervolume",
+            source=hv_source,
+            size=7,
+            fill_color="purple",
+            line_color="black",
+            hover_fill_color="#FF007F",
+            legend_label="Hypervolume",
+        )
+
+        hover_hv = HoverTool(
+            renderers=[r_scat],
+            mode="vline",
+            tooltips=[
+                ("Iteration", "@iteration"),
+                ("Hypervolume", "@hypervolume{0.0000}"),
+            ],
+        )
+        p_hv.add_tools(hover_hv)
+
+        if p_hv.legend:
+            leg = p_hv.legend[0]
+            p_hv.add_layout(leg, "right")
+            leg.click_policy = "hide"
+
+        return p_hv
+
     # -------------------------------------------------------------------------
     # Server Lifecycle & Event Dispatch
     # -------------------------------------------------------------------------
@@ -468,6 +596,7 @@ class BokehIterativeVisualizer:
             source,
             pareto_2d_source,
             pareto_nd_source,
+            hv_source,
             x_select,
             y_select,
             p_pareto,
@@ -484,6 +613,7 @@ class BokehIterativeVisualizer:
             pareto_nd_source.data = self._calc_nd_pareto_data(
                 data, x_select.value, y_select.value
             )
+            hv_source.data = self._calc_hv_data(data)
 
         def on_dropdown_change(attr, old, new):
             pareto_bg.glyph.x = f"{x_select.value}_raw"
@@ -514,12 +644,14 @@ class BokehIterativeVisualizer:
     def save_snapshot(self, filepath: str):
         """Generates an HTML visualization archive alongside full and N-D Pareto CSV exports."""
         current_data = self.store.get_copy()
-        snapshot_layout, _, _, _, _, _, _, _, _, _ = self._build_ui(
-            current_data
-        )
+        snapshot_layout, *_ = self._build_ui(current_data)
 
         # Save HTML interface
-        output_file(str(Path(filepath)/"visualizer.html"), mode="inline", title="Iteration Archive")
+        output_file(
+            str(Path(filepath) / "visualizer.html"),
+            mode="inline",
+            title="Iteration Archive",
+        )
         save(snapshot_layout)
 
         # Export raw CSV files if data is available
@@ -528,14 +660,16 @@ class BokehIterativeVisualizer:
             and "iteration" in current_data
             and len(current_data["iteration"]) > 0
         ):
-            # Export 1: Full Iteration Data
             full_df = pd.DataFrame(current_data)
-            full_df.to_csv(str(Path(filepath)/"visualizer_full_data.csv"), index=False)
+            full_df.to_csv(
+                str(Path(filepath) / "visualizer_full_data.csv"), index=False
+            )
 
-            # Export 2: N-D Pareto Optimal Subset
             nd_indices = self._calc_nd_pareto_indices(current_data)
             pareto_df = full_df.iloc[nd_indices].copy()
-            pareto_df.to_csv(str(Path(filepath)/"visualizer_nd_pareto.csv"), index=False)
+            pareto_df.to_csv(
+                str(Path(filepath) / "visualizer_nd_pareto.csv"), index=False
+            )
 
     def push_update(self, df: pd.DataFrame):
         """Thread-safe update broadcasted across all active documents."""
@@ -595,6 +729,7 @@ class BokehIterativeVisualizer:
             )
         return data
 
+
 class VisualizerServerManager:
 
     def __init__(self, port=5006):
@@ -612,18 +747,14 @@ class VisualizerServerManager:
         instance with updated parameter schemas.
         """
         with self._lock:
-            # If instance ID matches and server is alive, return current visualizer
             if self.current_instance_id == instance_id and self.server:
                 return self.visualizer
 
-            # Teardown active server on instance ID mismatch
             if self.server:
                 self._stop_server_unlocked()
 
-            # Instantiate new visualizer with new parameters/meshgrids
             self.visualizer = visualizer_cls(**visualizer_kwargs)
 
-            # Re-bind Bokeh Server on port
             self.server = Server(
                 {"/": self.visualizer.bkapp},
                 port=self.port,
@@ -631,7 +762,6 @@ class VisualizerServerManager:
             )
             self.server.start()
 
-            # Launch Tornado I/O loop in background thread
             self.io_thread = threading.Thread(
                 target=self.server.io_loop.start
             )
@@ -644,14 +774,11 @@ class VisualizerServerManager:
     def _stop_server_unlocked(self):
         """Tears down Tornado I/O loop and unbinds port socket."""
         if self.server:
-            # 1. Unbind listening socket
             self.server.stop()
 
-            # 2. Schedule thread-safe stop callback on Tornado loop
             if self.server.io_loop:
                 self.server.io_loop.add_callback(self.server.io_loop.stop)
 
-            # 3. Wait for background IO thread to terminate
             if self.io_thread and self.io_thread.is_alive():
                 self.io_thread.join(timeout=3.0)
 

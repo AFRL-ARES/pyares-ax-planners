@@ -8,9 +8,9 @@ if __name__ == "__main__":
         prog='PyAres_cont_bo_planner',
         description="Starts a Multi-Objective capibile Bayesian optimization planner for continuous variable powered by Meta's Ax framework",
     )
-    parser.add_argument('-p','--port',help='Port to host the planner service on',type=int, default=1336)
+    parser.add_argument('-p','--port',help='Port to host the planner service on',type=int, default=6003)
     parser.add_argument('-l','--local',help='Whether to run the service only on localhost', type=bool, default=True)
-    parser.add_argument('-bp','--bokeh_port',help='Port for the Bokeh Visualizer Service', type=int, default=2336)
+    parser.add_argument('-bp','--bokeh_port',help='Port for the Bokeh Visualizer Service', type=int, default=6004)
     args = parser.parse_args()
     port = args.port
     local = args.local
