@@ -20,8 +20,8 @@ dependencies = [
     "pandas (>=3.0.0)",
     "matplotlib (>=3.10.0)",
     "sympy (>=1.14.0)",
-    "openpyxl (>=3.0.0)"
-    "bokeh (>=3.10.0),
+    "openpyxl (>=3.0.0)",
+    "bokeh (>=3.10.0)"
 ]
 readme = "readme.md"
 
